@@ -11,11 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.config import settings
+from app.etl.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    start_scheduler()
     yield
+    stop_scheduler()
 
 
 app = FastAPI(

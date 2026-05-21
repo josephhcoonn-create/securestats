@@ -283,8 +283,55 @@ async def run_etl_for_date(target_date: date) -> ETLResult:
 
 
 async def run_daily_etl() -> ETLResult:
-    """Run the ETL pipeline for today. Called by the APScheduler job."""
+    """Run the full ETL pipeline for today. Called by the APScheduler daily job."""
     return await run_etl_for_date(date.today())
+
+
+# Live-game statuses worth refreshing every 15 min
+_LIVE_STATUSES: frozenset[str] = frozenset(
+    {"In Progress", "Manager challenge", "Delay", "Delayed"}
+)
+
+
+async def run_live_update() -> ETLResult:
+    """
+    Lightweight update — only processes games currently *in progress*.
+
+    Called by the APScheduler live-update job every 15 min during game hours.
+    Much faster than run_daily_etl() because it skips completed / scheduled games.
+    """
+    result = ETLResult(run_date=date.today())
+    start = time.monotonic()
+
+    logger.info("--- Live update START ---")
+    try:
+        async with MLBClient() as mlb, AsyncSessionLocal() as session:
+            async with session.begin():
+                games = await mlb.get_todays_schedule()
+                live_games = [g for g in games if g["status"] in _LIVE_STATUSES]
+
+                logger.info(
+                    "Live update: %d total games, %d in progress",
+                    len(games),
+                    len(live_games),
+                )
+
+                for game_info in live_games:
+                    try:
+                        await _process_game(session, mlb, game_info, result)
+                    except Exception as exc:  # noqa: BLE001
+                        msg = f"game {game_info['game_id']} live-update failed: {exc}"
+                        logger.error("  %s", msg)
+                        result.errors.append(msg)
+
+    except Exception as exc:  # noqa: BLE001
+        msg = f"Live update pipeline failure: {exc}"
+        logger.exception(msg)
+        result.errors.append(msg)
+
+    result.duration_seconds = time.monotonic() - start
+    logger.info("--- Live update END  %s ---", result.summary())
+    return result
 
 
 async def backfill_date_range(
