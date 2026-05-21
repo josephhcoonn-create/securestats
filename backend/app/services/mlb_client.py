@@ -39,6 +39,7 @@ class BattingStatsInfo(TypedDict):
     player_name: str
     team: str
     team_id: int
+    position: str
     at_bats: int
     hits: int
     home_runs: int
@@ -207,14 +208,14 @@ class MLBClient:
 
     # ── Public API methods ────────────────────────────────────────────────────
 
-    async def get_todays_schedule(self) -> list[GameInfo]:
+    async def get_todays_schedule(self, target_date: date | None = None) -> list[GameInfo]:
         """
-        Return today's MLB schedule.
+        Return the MLB schedule for *target_date* (defaults to today).
 
-        Calls ``GET /schedule?sportId=1&date={today}``.
+        Calls ``GET /schedule?sportId=1&date={date}``.
         """
-        today = date.today().isoformat()
-        data = await self._get("/schedule", params={"sportId": "1", "date": today})
+        query_date = (target_date or date.today()).isoformat()
+        data = await self._get("/schedule", params={"sportId": "1", "date": query_date})
 
         games: list[GameInfo] = []
         for date_block in data.get("dates", []):
@@ -234,7 +235,7 @@ class MLBClient:
                         status=g["status"].get("detailedState", "Unknown"),
                     )
                 )
-        logger.info("get_todays_schedule: %d games on %s", len(games), today)
+        logger.info("get_todays_schedule: %d games on %s", len(games), query_date)
         return games
 
     async def get_game_boxscore(self, game_id: int) -> list[BattingStatsInfo]:
@@ -261,12 +262,14 @@ class MLBClient:
                 if not batting:
                     continue  # skip pitchers / non-batters with no stats
                 person = player_data.get("person", {})
+                position = player_data.get("position", {}).get("abbreviation", "N/A")
                 stats.append(
                     BattingStatsInfo(
                         player_id=player_id,
                         player_name=person.get("fullName", "Unknown"),
                         team=team_name,
                         team_id=team_id,
+                        position=position,
                         at_bats=int(batting.get("atBats", 0)),
                         hits=int(batting.get("hits", 0)),
                         home_runs=int(batting.get("homeRuns", 0)),
