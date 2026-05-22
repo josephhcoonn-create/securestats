@@ -224,7 +224,7 @@ class TestMLBClientParsing:
 
         assert len(lines) == 3  # 2 home + 1 away
 
-        turner = next(l for l in lines if l["player_id"] == 656756)
+        turner = next(line for line in lines if line["player_id"] == 656756)
         assert turner["player_name"] == "Trea Turner"
         assert turner["team"] == "Philadelphia Phillies"
         assert turner["position"] == "SS"
@@ -236,7 +236,7 @@ class TestMLBClientParsing:
         assert turner["on_base_pct"] == pytest.approx(0.342)
         assert turner["slugging_pct"] == pytest.approx(0.512)
 
-        cruz = next(l for l in lines if l["player_id"] == 669742)
+        cruz = next(line for line in lines if line["player_id"] == 669742)
         assert cruz["team"] == "Cincinnati Reds"
         assert cruz["position"] == "SS"
 

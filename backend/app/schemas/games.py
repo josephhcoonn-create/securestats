@@ -6,7 +6,6 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # ── Boxscore line (one batter in a game) ─────────────────────────────────────
 
 

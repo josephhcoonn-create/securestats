@@ -48,10 +48,14 @@ export default function PlayerTable() {
   const [expandedId, setExpandedId] = useState(null)
 
   // Reset to page 0 whenever filter/sort changes so the user doesn't
-  // get stranded on a page that no longer exists.
+  // get stranded on a page that no longer exists. The effect is the
+  // simplest expression of "when these change, also reset" — the
+  // alternative (firing resets from every change handler) is noisier.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
     setPage(0)
     setExpandedId(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [debouncedQuery, sortBy, sortOrder])
 
   const offset = page * PAGE_SIZE

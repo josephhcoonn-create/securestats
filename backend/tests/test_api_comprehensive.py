@@ -64,7 +64,6 @@ from app.models.game import Game
 from app.models.player import Player
 from tests.conftest import TestSessionLocal
 
-
 # ── Fixture dataset definition ────────────────────────────────────────────────
 
 # (mlb_id, full_name, team, position, at_bats, hits, home_runs, rbis, obp, slg)

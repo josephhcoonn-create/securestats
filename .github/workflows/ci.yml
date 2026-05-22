@@ -2,12 +2,19 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, master, develop]
   pull_request:
-    branches: [main]
+    branches: [main, master]
+
+# Cancel in-flight runs for the same ref when a newer push lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  backend-test:
+  # ─── Backend: ruff lint + pytest with coverage gate ─────────────────────────
+  backend-lint-test:
+    name: backend (lint + test + coverage)
     runs-on: ubuntu-latest
 
     services:
@@ -21,9 +28,13 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
 
     steps:
       - uses: actions/checkout@v4
@@ -31,15 +42,82 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
 
       - name: Install dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
 
-      - name: Run tests
-        working-directory: backend
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Pytest + coverage (fail under 70 %)
         env:
           DATABASE_URL: postgresql+psycopg://securestats:changeme@localhost:5432/securestats_test
           SECRET_KEY: ci-test-secret
           ALGORITHM: HS256
-        run: pytest tests/ -v
+        run: |
+          pytest --cov=app --cov-report=term --cov-report=xml --cov-fail-under=70 -q
+
+      - name: Upload coverage XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          if-no-files-found: ignore
+
+  # ─── Frontend: ESLint + (optional) jest tests ───────────────────────────────
+  frontend-lint-test:
+    name: frontend (lint + test)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      # No jest tests yet; this step is a no-op until they exist, but it
+      # surfaces clearly in the job output if/when one of them fails.
+      - name: Jest (only if a test script exists)
+        run: |
+          if npm run | grep -qE '^  test$'; then
+            npm test -- --ci --passWithNoTests
+          else
+            echo "No 'test' script defined; skipping."
+          fi
+
+  # ─── Docker: build every image to catch Dockerfile rot ──────────────────────
+  docker-build:
+    name: docker (compose build)
+    runs-on: ubuntu-latest
+    needs: [backend-lint-test, frontend-lint-test]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Provision .env so docker compose can interpolate
+        run: cp .env.example .env
+
+      - name: Build all services
+        run: docker compose build --pull

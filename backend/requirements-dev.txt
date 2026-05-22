@@ -1,0 +1,4 @@
+# Dev-only tooling: linters, formatters, coverage. Kept separate so
+# the production image stays small.
+ruff==0.6.9
+pytest-cov==5.0.0

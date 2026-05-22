@@ -10,7 +10,6 @@ the frontend:
 
 from pydantic import BaseModel, Field
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 

@@ -1,0 +1,32 @@
+# Ruff configuration for the SecureStats backend.
+# See https://docs.astral.sh/ruff/configuration/
+
+target-version = "py311"
+line-length = 100
+
+# Generated migration files don't need to follow our style.
+exclude = [
+    ".venv",
+    "venv",
+    "alembic/versions",
+    "__pycache__",
+    ".pytest_cache",
+]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import order)
+    "B",   # flake8-bugbear (common Python footguns)
+    "UP",  # pyupgrade (modern syntax)
+]
+ignore = [
+    "E501",  # line-too-long — formatter handles this
+    "B008",  # function-call-in-default — FastAPI uses Depends() in defaults
+]
+
+[lint.per-file-ignores]
+# Tests routinely import fixtures via *, monkey-patch private attrs, etc.
+"tests/*" = ["F401", "F811"]

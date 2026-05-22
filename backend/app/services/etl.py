@@ -25,12 +25,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.database import AsyncSessionLocal
 from app.models.batting_stats import BattingStats

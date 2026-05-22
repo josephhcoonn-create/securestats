@@ -53,8 +53,8 @@ async def get_current_user(
         if user_id is None or role_str is None:
             raise credentials_exception
         role = UserRole(role_str)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except (JWTError, ValueError) as err:
+        raise credentials_exception from err
 
     return TokenPayload(user_id=int(user_id), role=role)
 
