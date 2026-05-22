@@ -1,29 +1,36 @@
+# SecureStats full-stack — `docker compose up --build`
+#
+#   db        → Postgres 16 with a named volume for persistence
+#   backend   → FastAPI; runs `alembic upgrade head` then uvicorn
+#   frontend  → React (Vite) served by nginx; proxies /api → backend
+#
+# Frontend is exposed on http://localhost:8080. The backend is reached
+# through the frontend's nginx proxy (it's not published to the host).
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_USER:     ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    ports:
-      - "5432:5432"
+      POSTGRES_DB:       ${POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test:     ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout:  5s
+      retries:  5
 
   backend:
     build: ./backend
     restart: unless-stopped
     env_file: .env
     environment:
-      # Override the host so the API connects to the compose DB service,
-      # not whatever's in .env (which is set up for host-mode Postgres).
+      # Force the compose-internal hostname even if the .env points at
+      # localhost for host-mode development.
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     depends_on:
       db:
@@ -31,23 +38,30 @@ services:
     expose:
       - "8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      test:         ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval:     30s
+      timeout:      5s
+      retries:      3
       start_period: 15s
 
   frontend:
     build:
       context: ./frontend
-      # The SPA hits its own nginx at /api/v1; nginx proxies to backend.
       args:
-        VITE_API_URL: /api/v1
+        # SPA hits /api/v1 on its own nginx, which proxies to backend.
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "8080:80"
+    healthcheck:
+      test:         ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval:     30s
+      timeout:      3s
+      retries:      3
+      start_period: 5s
 
 volumes:
   postgres_data:
