@@ -1,0 +1,35 @@
+{
+  "dates": [
+    {
+      "date": "2026-05-20",
+      "games": [
+        {
+          "gamePk": 823462,
+          "status": { "detailedState": "Final" },
+          "teams": {
+            "home": {
+              "team": { "id": 143, "name": "Philadelphia Phillies" },
+              "score": 7
+            },
+            "away": {
+              "team": { "id": 113, "name": "Cincinnati Reds" },
+              "score": 3
+            }
+          }
+        },
+        {
+          "gamePk": 823463,
+          "status": { "detailedState": "Scheduled" },
+          "teams": {
+            "home": {
+              "team": { "id": 147, "name": "New York Yankees" }
+            },
+            "away": {
+              "team": { "id": 111, "name": "Boston Red Sox" }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

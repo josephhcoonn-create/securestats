@@ -1,0 +1,61 @@
+{
+  "teams": {
+    "home": {
+      "team": { "id": 143, "name": "Philadelphia Phillies" },
+      "batters": [656756, 514888],
+      "players": {
+        "ID656756": {
+          "person": { "id": 656756, "fullName": "Trea Turner" },
+          "position": { "abbreviation": "SS" },
+          "stats": {
+            "batting": {
+              "atBats": 4,
+              "hits": 2,
+              "homeRuns": 1,
+              "rbi": 2,
+              "avg": ".289",
+              "obp": ".342",
+              "slg": ".512"
+            }
+          }
+        },
+        "ID514888": {
+          "person": { "id": 514888, "fullName": "Bryce Harper" },
+          "position": { "abbreviation": "1B" },
+          "stats": {
+            "batting": {
+              "atBats": 3,
+              "hits": 1,
+              "homeRuns": 0,
+              "rbi": 1,
+              "avg": ".310",
+              "obp": ".400",
+              "slg": ".540"
+            }
+          }
+        }
+      }
+    },
+    "away": {
+      "team": { "id": 113, "name": "Cincinnati Reds" },
+      "batters": [669742],
+      "players": {
+        "ID669742": {
+          "person": { "id": 669742, "fullName": "Elly De La Cruz" },
+          "position": { "abbreviation": "SS" },
+          "stats": {
+            "batting": {
+              "atBats": 4,
+              "hits": 1,
+              "homeRuns": 1,
+              "rbi": 3,
+              "avg": ".245",
+              "obp": ".310",
+              "slg": ".480"
+            }
+          }
+        }
+      }
+    }
+  }
+}
