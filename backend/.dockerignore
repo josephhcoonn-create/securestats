@@ -1,0 +1,17 @@
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.coverage
+htmlcov
+.env
+.env.local
+.git
+.gitignore
+Dockerfile
+.dockerignore
+tests
+README.md
+scripts

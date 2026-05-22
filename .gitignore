@@ -42,7 +42,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # ── Docker ────────────────────────────────────────────────────────────────────
-*.dockerignore
+# (intentionally not ignoring .dockerignore — those files belong in git)
 
 # ── IDE / OS ──────────────────────────────────────────────────────────────────
 .vscode/
