@@ -6,7 +6,9 @@ import ProtectedRoute from './components/ProtectedRoute'
 import Dashboard from './components/Dashboard'
 import LoginPage from './pages/LoginPage'
 import PlayersPage from './pages/PlayersPage'
-import PlaceholderPage from './pages/PlaceholderPage'
+import LeadersPage from './pages/LeadersPage'
+import StreaksPage from './pages/StreaksPage'
+import ComparePage from './pages/ComparePage'
 import UnauthorizedPage from './pages/UnauthorizedPage'
 
 const queryClient = new QueryClient({
@@ -39,33 +41,9 @@ export default function App() {
             >
               <Route index element={<Navigate to="/players" replace />} />
               <Route path="/players" element={<PlayersPage />} />
-              <Route
-                path="/leaders"
-                element={
-                  <PlaceholderPage
-                    title="Batting Leaders"
-                    subtitle="Charts and rankings land in Task 5.3."
-                  />
-                }
-              />
-              <Route
-                path="/streaks"
-                element={
-                  <PlaceholderPage
-                    title="Hot & Cold Streaks"
-                    subtitle="Streak detection UI lands in Task 5.3."
-                  />
-                }
-              />
-              <Route
-                path="/compare"
-                element={
-                  <PlaceholderPage
-                    title="Player Comparison"
-                    subtitle="Side-by-side comparison lands in Task 5.4."
-                  />
-                }
-              />
+              <Route path="/leaders" element={<LeadersPage />} />
+              <Route path="/streaks" element={<StreaksPage />} />
+              <Route path="/compare" element={<ComparePage />} />
             </Route>
 
             {/* Catch-all */}
