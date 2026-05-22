@@ -11,7 +11,7 @@ from datetime import date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import Float, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import TokenPayload, require_role
@@ -34,12 +34,46 @@ router = APIRouter(prefix="/players", tags=["players"])
 # Shared dependency: any authenticated viewer or above
 _viewer = Depends(require_role(UserRole.viewer))
 
+# Player-row aggregates (career totals from batting_stats) reused by
+# list / search endpoints so the dashboard table can show & sort by them.
+_GAMES_PLAYED = func.count(BattingStats.id).label("games_played")
+_TOTAL_AB = func.coalesce(func.sum(BattingStats.at_bats), 0).label("total_ab")
+_TOTAL_HITS = func.coalesce(func.sum(BattingStats.hits), 0).label("total_hits")
+_TOTAL_HR = func.coalesce(func.sum(BattingStats.home_runs), 0).label("total_hr")
+_TOTAL_RBI = func.coalesce(func.sum(BattingStats.rbis), 0).label("total_rbi")
+_CAREER_AVG = (
+    func.sum(BattingStats.hits).cast(Float)
+    / func.nullif(func.sum(BattingStats.at_bats), 0)
+).label("career_avg")
+
+
+def _make_summary(player: Player, row) -> PlayerSummary:
+    """Convert a (Player, aggregates…) Row into a PlayerSummary."""
+    return PlayerSummary(
+        id=player.id,
+        mlb_id=player.mlb_id,
+        full_name=player.full_name,
+        team=player.team,
+        position=player.position,
+        games_played=int(row.games_played or 0),
+        career_batting_avg=(
+            round(float(row.career_avg), 3) if row.career_avg is not None else None
+        ),
+        career_home_runs=int(row.total_hr or 0),
+        career_rbis=int(row.total_rbi or 0),
+    )
+
+
 # Column names the client is allowed to sort by
 _PLAYER_SORT_FIELDS: dict[str, object] = {
     "full_name": Player.full_name,
     "team": Player.team,
     "position": Player.position,
     "mlb_id": Player.mlb_id,
+    "games_played": _GAMES_PLAYED,
+    "career_batting_avg": _CAREER_AVG,
+    "career_home_runs": _TOTAL_HR,
+    "career_rbis": _TOTAL_RBI,
 }
 
 _STATS_SORT_FIELDS: dict[str, object] = {
@@ -76,16 +110,26 @@ async def search_players(
 
     rows = (
         await db.execute(
-            select(Player)
+            select(
+                Player,
+                _GAMES_PLAYED,
+                _TOTAL_AB,
+                _TOTAL_HITS,
+                _TOTAL_HR,
+                _TOTAL_RBI,
+                _CAREER_AVG,
+            )
+            .outerjoin(BattingStats, BattingStats.player_id == Player.id)
             .where(base)
+            .group_by(Player.id)
             .order_by(Player.full_name)
             .limit(limit)
             .offset(offset)
         )
-    ).scalars().all()
+    ).all()
 
     return PlayerListResponse(
-        items=[PlayerSummary.model_validate(p) for p in rows],
+        items=[_make_summary(r[0], r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
@@ -106,7 +150,16 @@ async def list_players(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
     sort_by: Annotated[
-        Literal["full_name", "team", "position", "mlb_id"],
+        Literal[
+            "full_name",
+            "team",
+            "position",
+            "mlb_id",
+            "games_played",
+            "career_batting_avg",
+            "career_home_runs",
+            "career_rbis",
+        ],
         Query(description="Field to sort by"),
     ] = "full_name",
     sort_order: Annotated[Literal["asc", "desc"], Query()] = "asc",
@@ -120,21 +173,47 @@ async def list_players(
         filters.append(Player.position.ilike(f"%{position}%"))
 
     count_q = select(func.count(Player.id))
-    list_q = select(Player)
     if filters:
         count_q = count_q.where(*filters)
-        list_q = list_q.where(*filters)
-
     total: int = (await db.execute(count_q)).scalar_one()
 
-    col = _PLAYER_SORT_FIELDS[sort_by]
-    order = col.asc() if sort_order == "asc" else col.desc()  # type: ignore[union-attr]
+    list_q = (
+        select(
+            Player,
+            _GAMES_PLAYED,
+            _TOTAL_AB,
+            _TOTAL_HITS,
+            _TOTAL_HR,
+            _TOTAL_RBI,
+            _CAREER_AVG,
+        )
+        .outerjoin(BattingStats, BattingStats.player_id == Player.id)
+        .group_by(Player.id)
+    )
+    if filters:
+        list_q = list_q.where(*filters)
+
+    # Aggregate columns sort via label name with NULLS handling so players
+    # with no games don't dominate desc sorts on AVG/HR/RBI.
+    _AGG_LABELS = {
+        "games_played": "games_played",
+        "career_batting_avg": "career_avg",
+        "career_home_runs": "total_hr",
+        "career_rbis": "total_rbi",
+    }
+    if sort_by in _AGG_LABELS:
+        nulls = "NULLS LAST" if sort_order == "desc" else "NULLS FIRST"
+        order = text(f"{_AGG_LABELS[sort_by]} {sort_order.upper()} {nulls}")
+    else:
+        col = _PLAYER_SORT_FIELDS[sort_by]
+        order = col.asc() if sort_order == "asc" else col.desc()  # type: ignore[union-attr]
+
     rows = (
         await db.execute(list_q.order_by(order).limit(limit).offset(offset))
-    ).scalars().all()
+    ).all()
 
     return PlayerListResponse(
-        items=[PlayerSummary.model_validate(p) for p in rows],
+        items=[_make_summary(r[0], r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,

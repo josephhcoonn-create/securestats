@@ -33,7 +33,14 @@ class CareerStats(BaseModel):
 
 
 class PlayerSummary(BaseModel):
-    """Flat player row — used in list responses and as a nested sub-object."""
+    """Flat player row — used in list responses and as a nested sub-object.
+
+    The aggregate fields (games_played, career_batting_avg, career_home_runs,
+    career_rbis) are populated by the list/search endpoints via a LEFT JOIN +
+    GROUP BY on batting_stats. They're optional because nested usages
+    (e.g. PlayerStatsResponse.player) build a summary from the bare ORM
+    object and leave them None.
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -42,6 +49,12 @@ class PlayerSummary(BaseModel):
     full_name: str
     team: str
     position: str
+
+    # Career aggregates — optional, populated by list/search endpoints only
+    games_played: int | None = None
+    career_batting_avg: float | None = None
+    career_home_runs: int | None = None
+    career_rbis: int | None = None
 
 
 class PlayerDetail(PlayerSummary):

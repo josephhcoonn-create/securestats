@@ -3,8 +3,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { AuthProvider } from './hooks/useAuth'
 import ProtectedRoute from './components/ProtectedRoute'
+import Dashboard from './components/Dashboard'
 import LoginPage from './pages/LoginPage'
-import DashboardPage from './pages/DashboardPage'
+import PlayersPage from './pages/PlayersPage'
+import PlaceholderPage from './pages/PlaceholderPage'
 import UnauthorizedPage from './pages/UnauthorizedPage'
 
 const queryClient = new QueryClient({
@@ -27,18 +29,47 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/unauthorized" element={<UnauthorizedPage />} />
 
-            {/* Protected */}
+            {/* Protected — shared Dashboard shell */}
             <Route
-              path="/"
               element={
                 <ProtectedRoute>
-                  <DashboardPage />
+                  <Dashboard />
                 </ProtectedRoute>
               }
-            />
+            >
+              <Route index element={<Navigate to="/players" replace />} />
+              <Route path="/players" element={<PlayersPage />} />
+              <Route
+                path="/leaders"
+                element={
+                  <PlaceholderPage
+                    title="Batting Leaders"
+                    subtitle="Charts and rankings land in Task 5.3."
+                  />
+                }
+              />
+              <Route
+                path="/streaks"
+                element={
+                  <PlaceholderPage
+                    title="Hot & Cold Streaks"
+                    subtitle="Streak detection UI lands in Task 5.3."
+                  />
+                }
+              />
+              <Route
+                path="/compare"
+                element={
+                  <PlaceholderPage
+                    title="Player Comparison"
+                    subtitle="Side-by-side comparison lands in Task 5.4."
+                  />
+                }
+              />
+            </Route>
 
             {/* Catch-all */}
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/players" replace />} />
           </Routes>
         </AuthProvider>
       </BrowserRouter>
