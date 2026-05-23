@@ -135,18 +135,41 @@ The stack will:
 
 ### Seed data
 
-The schema is empty after a fresh start. Either:
+The schema is empty after a fresh start. The quickest path: one command
+creates three demo users *and* backfills the last 7 days of MLB games:
 
 ```bash
-# Backfill the last 90 days of MLB games (~5 min, 90 days × ~16 games/day)
+docker compose exec backend python -m scripts.seed
+```
+
+| Username | Password | Role |
+|---|---|---|
+| `admin`   | `admin123`   | admin |
+| `analyst` | `analyst123` | analyst |
+| `viewer`  | `viewer123`  | viewer |
+
+> **Change these in any non-local environment.**
+
+Other options:
+
+```bash
+# Longer backfill window (~5 min for 90 days)
 docker compose exec backend python scripts/backfill.py --days 90
 
-# OR — just trigger today's daily ETL (admin token required)
+# Just trigger today's daily ETL (admin token required)
 curl -X POST -H "Authorization: Bearer $TOKEN" \
      http://localhost:8080/api/v1/etl/trigger
 ```
 
-Create a user via the registration endpoint, then promote your role via SQL if you need analyst/admin access (full self-serve role management is a roadmap item).
+### Reset the database (dev only)
+
+```bash
+docker compose exec backend python -m scripts.reset_db          # prompts
+docker compose exec backend python -m scripts.reset_db --yes    # skip prompt
+```
+
+Drops the `public` schema, re-runs all migrations. Refuses to run when
+`ENVIRONMENT=production`.
 
 ### Access
 
