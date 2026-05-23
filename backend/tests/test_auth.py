@@ -22,7 +22,7 @@ class TestRegistration:
     async def test_register_success(self, client: AsyncClient):
         resp = await client.post(
             "/api/v1/auth/register",
-            json={"username": "newuser", "email": "new@test.com", "password": "testpass123"},
+            json={"username": "newuser", "email": "new@test.com", "password": "Testpass123"},
         )
         assert resp.status_code == 201
         data = resp.json()
@@ -35,12 +35,12 @@ class TestRegistration:
         assert "hashed_password" not in data
 
     async def test_register_duplicate_username(self, client: AsyncClient):
-        payload = {"username": "dupuser", "email": "first@test.com", "password": "testpass123"}
+        payload = {"username": "dupuser", "email": "first@test.com", "password": "Testpass123"}
         await client.post("/api/v1/auth/register", json=payload)
 
         resp = await client.post(
             "/api/v1/auth/register",
-            json={"username": "dupuser", "email": "second@test.com", "password": "testpass123"},
+            json={"username": "dupuser", "email": "second@test.com", "password": "Testpass123"},
         )
         assert resp.status_code == 409
         assert "Username" in resp.json()["detail"]
@@ -48,11 +48,11 @@ class TestRegistration:
     async def test_register_duplicate_email(self, client: AsyncClient):
         await client.post(
             "/api/v1/auth/register",
-            json={"username": "user_a", "email": "shared@test.com", "password": "testpass123"},
+            json={"username": "user_a", "email": "shared@test.com", "password": "Testpass123"},
         )
         resp = await client.post(
             "/api/v1/auth/register",
-            json={"username": "user_b", "email": "shared@test.com", "password": "testpass123"},
+            json={"username": "user_b", "email": "shared@test.com", "password": "Testpass123"},
         )
         assert resp.status_code == 409
         assert "Email" in resp.json()["detail"]
@@ -67,7 +67,7 @@ class TestRegistration:
     async def test_register_invalid_email(self, client: AsyncClient):
         resp = await client.post(
             "/api/v1/auth/register",
-            json={"username": "bademail", "email": "not-an-email", "password": "testpass123"},
+            json={"username": "bademail", "email": "not-an-email", "password": "Testpass123"},
         )
         assert resp.status_code == 422
 
@@ -83,7 +83,7 @@ class TestLogin:
     ):
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": "viewer_test", "password": "testpass123"},
+            json={"username": "viewer_test", "password": "Testpass123"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -110,7 +110,7 @@ class TestLogin:
     async def test_login_nonexistent_user(self, client: AsyncClient):
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": "ghost_user", "password": "testpass123"},
+            json={"username": "ghost_user", "password": "Testpass123"},
         )
         assert resp.status_code == 401
 
@@ -118,7 +118,7 @@ class TestLogin:
         """Username lookup must be exact — 'Viewer_Test' is not 'viewer_test'."""
         resp = await client.post(
             "/api/v1/auth/login",
-            json={"username": "Viewer_Test", "password": "testpass123"},
+            json={"username": "Viewer_Test", "password": "Testpass123"},
         )
         assert resp.status_code == 401
 

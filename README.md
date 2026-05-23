@@ -144,11 +144,14 @@ docker compose exec backend python -m scripts.seed
 
 | Username | Password | Role |
 |---|---|---|
-| `admin`   | `admin123`   | admin |
-| `analyst` | `analyst123` | analyst |
-| `viewer`  | `viewer123`  | viewer |
+| `admin`   | `Admin123!`   | admin |
+| `analyst` | `Analyst123!` | analyst |
+| `viewer`  | `Viewer123!`  | viewer |
 
-> **Change these in any non-local environment.**
+> **Change these in any non-local environment.** The seed bypasses
+> Pydantic validation by hashing directly, but the API enforces 8+
+> chars with mixed case and a digit for any user registered through
+> `POST /auth/register`.
 
 Other options:
 
@@ -190,7 +193,8 @@ Full interactive docs live at **http://localhost:8000/docs** (Swagger UI) and **
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/auth/register` | Create a new viewer account |
-| `POST` | `/auth/login` | Exchange username + password for a JWT |
+| `POST` | `/auth/login` | Exchange username + password for a JWT (rate-limited 5/min/IP) |
+| `POST` | `/auth/refresh` | Issue a new token when the current one is in its last 30 min |
 | `GET` | `/auth/me` | Current user (requires bearer token) |
 
 ### Players (`/api/v1/players/*`) — viewer+
@@ -279,17 +283,22 @@ Migrations are managed with **Alembic** (`backend/alembic/`) and run automatical
 
 | Layer | Mechanism |
 |---|---|
-| **Authentication** | JWT bearer tokens signed with HS256; configurable lifetime via `ACCESS_TOKEN_EXPIRE_MINUTES` |
+| **Authentication** | JWT bearer tokens signed with HS256; default 60-min lifetime. `POST /auth/refresh` issues a new token when the current one is within the last 30 min of expiry |
+| **Rate limiting** | slowapi per-IP throttling: 5/min on `/auth/login`, 3/min on `/auth/register`, 60/min default. Returns 429 with `Retry-After` |
 | **Password storage** | bcrypt hashing (work factor 12) — passwords never logged or returned |
+| **Password policy** | Min 8 chars, at least one uppercase, one lowercase, one digit; enforced at the Pydantic schema |
 | **Authorization** | Three-tier RBAC: `viewer` < `analyst` < `admin`. Each route declares its minimum role via a `require_role()` dependency |
-| **Input validation** | Pydantic v2 schemas at every request boundary; FastAPI returns 422 on shape mismatch |
+| **Input validation** | Pydantic v2 schemas at every request boundary with explicit `min_length`/`max_length` bounds and a `[A-Za-z0-9_-]{3,50}` regex on usernames; FastAPI returns 422 on shape mismatch |
+| **Structured logging** | JSON or text format (toggleable via `LOG_FORMAT`); every auth event (success / failure / refresh) and every 4xx/5xx response is logged with category + action fields. Passwords and tokens are never logged |
 | **CORS** | Restricted to the configured frontend origin (default `http://localhost:5173` for dev, `http://localhost:8080` for compose) |
 | **SQL injection** | SQLAlchemy parameterized queries throughout — no raw SQL with user input |
 | **Container isolation** | Backend runs as non-root `appuser` (uid 1000); db has no host port in production |
 | **nginx hardening** | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy`, `Permissions-Policy`, locked-down CSP (`default-src 'self'`, no inline scripts, no eval) |
 | **Build-time secrets** | `SECRET_KEY` injected via `.env`; example file ships with placeholder + a `python -c "import secrets; print(secrets.token_urlsafe(64))"` snippet |
 
-> Rate limiting is on the [roadmap](#-roadmap).
+**Defense in depth:** the FastAPI backend sets all of the above headers
+*and* runs slowapi rate limiting even when accessed directly on
+`:8000` — the nginx hardening in front is additive, not the only layer.
 
 ---
 
@@ -389,7 +398,6 @@ npm run build    # Type-check + bundle
 
 ## 🗺️ Roadmap
 
-- [ ] **Rate limiting** — slowapi middleware on `/auth/*` and write-heavy endpoints
 - [ ] **WebSocket live updates** — push live boxscore deltas to the dashboard
 - [ ] **ML hit probability** — gradient-boosted model on park / pitcher / weather features
 - [ ] **Pitching stats** — extend ETL + schema for ERA / WHIP / K/9

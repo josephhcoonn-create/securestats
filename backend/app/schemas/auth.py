@@ -1,33 +1,50 @@
-from pydantic import BaseModel, EmailStr, field_validator
+import re
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models.user import UserRole
 
+# Allow letters/digits/underscore/hyphen; 3-50 chars. Anchored.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,50}$")
+
 
 class UserCreate(BaseModel):
-    username: str
-    email: EmailStr
-    password: str
+    """
+    Registration payload — username/email/password with tight bounds.
+
+    - username: 3-50 chars, [A-Za-z0-9_-] only
+    - email   : validated by EmailStr, capped at 255 chars (Postgres column width)
+    - password: min 8 chars, at least one uppercase, one lowercase, one digit
+    """
+
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr = Field(..., max_length=255)
+    password: str = Field(..., min_length=8, max_length=128)
 
     @field_validator("username")
     @classmethod
-    def username_alphanumeric(cls, v: str) -> str:
-        if not v.replace("_", "").replace("-", "").isalnum():
-            raise ValueError("username may only contain letters, digits, hyphens, and underscores")
-        if len(v) < 3 or len(v) > 50:
-            raise ValueError("username must be between 3 and 50 characters")
+    def username_pattern(cls, v: str) -> str:
+        if not _USERNAME_RE.match(v):
+            raise ValueError(
+                "username may only contain letters, digits, hyphens, and underscores"
+            )
         return v
 
     @field_validator("password")
     @classmethod
-    def password_min_length(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("password must be at least 8 characters")
+    def password_complexity(cls, v: str) -> str:
+        if not any(c.islower() for c in v):
+            raise ValueError("password must contain at least one lowercase letter")
+        if not any(c.isupper() for c in v):
+            raise ValueError("password must contain at least one uppercase letter")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("password must contain at least one digit")
         return v
 
 
 class UserLogin(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=50)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class UserResponse(BaseModel):

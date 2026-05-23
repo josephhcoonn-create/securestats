@@ -27,6 +27,9 @@ _ADMIN_SYNC_URL = "postgresql+psycopg://securestats:changeme@localhost:5432/post
 from app.config import settings  # noqa: E402
 
 settings.database_url = _TEST_ASYNC_URL
+# Tests share a process; per-IP rate limits would tank the suite the
+# moment a single test class hits /login more than 5 times. Disable.
+settings.rate_limit_enabled = False
 
 # ── App + DB imports (after settings override) ────────────────────────────────
 import app.models  # noqa: F401, E402 — registers all models on Base.metadata
@@ -99,7 +102,7 @@ async def viewer_user(client: AsyncClient) -> dict:
     """Register a viewer via the API and return the response dict."""
     resp = await client.post(
         "/api/v1/auth/register",
-        json={"username": "viewer_test", "email": "viewer@test.com", "password": "testpass123"},
+        json={"username": "viewer_test", "email": "viewer@test.com", "password": "Testpass123"},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -112,7 +115,7 @@ async def analyst_user() -> dict:
         user = User(
             username="analyst_test",
             email="analyst@test.com",
-            hashed_password=hash_password("testpass123"),
+            hashed_password=hash_password("Testpass123"),
             role=UserRole.analyst,
             is_active=True,
         )
@@ -129,7 +132,7 @@ async def admin_user() -> dict:
         user = User(
             username="admin_test",
             email="admin@test.com",
-            hashed_password=hash_password("testpass123"),
+            hashed_password=hash_password("Testpass123"),
             role=UserRole.admin,
             is_active=True,
         )

@@ -35,9 +35,9 @@ from app.services.etl import backfill_date_range  # noqa: E402
 # ── Demo users ────────────────────────────────────────────────────────────────
 
 DEMO_USERS = [
-    ("admin",   "admin@securestats.local",   "admin123",   UserRole.admin),
-    ("analyst", "analyst@securestats.local", "analyst123", UserRole.analyst),
-    ("viewer",  "viewer@securestats.local",  "viewer123",  UserRole.viewer),
+    ("admin",   "admin@securestats.local",   "Admin123!",   UserRole.admin),
+    ("analyst", "analyst@securestats.local", "Analyst123!", UserRole.analyst),
+    ("viewer",  "viewer@securestats.local",  "Viewer123!",  UserRole.viewer),
 ]
 
 BACKFILL_DAYS = 7
