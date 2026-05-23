@@ -35,8 +35,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    expose:
-      - "8000"
+    # Published on the host so OpenAPI docs at http://localhost:8000/docs
+    # work out of the box. Production deployments should remove this and
+    # rely on the nginx /api proxy only.
+    ports:
+      - "8000:8000"
     healthcheck:
       test:         ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval:     30s
