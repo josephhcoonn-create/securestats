@@ -55,6 +55,36 @@ class PlayerInfo(TypedDict):
     team: str
     team_id: int
     position: str
+    bats: str | None  # 'L' | 'R' | 'S' — batSide.code
+    throws: str | None  # 'L' | 'R' — pitchHand.code
+
+
+class PitchingLineInfo(TypedDict):
+    """Per-game pitching line — what get_game_pitching_lines returns."""
+    player_id: int
+    player_name: str
+    team: str
+    team_id: int
+    innings_pitched: float
+    hits_allowed: int
+    earned_runs: int
+    walks_allowed: int
+    strikeouts: int
+    era: float | None
+    whip: float | None
+    throws: str | None  # 'L' | 'R' if available
+
+
+class ProbablePitcherInfo(TypedDict):
+    """Probable starting pitchers for one upcoming game."""
+    game_id: int            # MLB gamePk
+    date: str               # ISO YYYY-MM-DD
+    home_team: str
+    away_team: str
+    home_pitcher_id: int | None
+    home_pitcher_name: str | None
+    away_pitcher_id: int | None
+    away_pitcher_name: str | None
 
 
 class RosterEntry(TypedDict):
@@ -304,13 +334,122 @@ class MLBClient:
         p = people[0]
         team = p.get("currentTeam") or {}
         position = p.get("primaryPosition") or {}
+        bat_side = (p.get("batSide") or {}).get("code")
+        pitch_hand = (p.get("pitchHand") or {}).get("code")
         return PlayerInfo(
             player_id=p["id"],
             full_name=p.get("fullName", "Unknown"),
             team=team.get("name", "Unknown"),
             team_id=team.get("id", 0),
             position=position.get("abbreviation", "N/A"),
+            bats=bat_side if bat_side in {"L", "R", "S"} else None,
+            throws=pitch_hand if pitch_hand in {"L", "R"} else None,
         )
+
+    # ── Pitching: boxscore lines + probable starters ────────────────────────
+
+    async def get_game_pitching_lines(self, game_id: int) -> list[PitchingLineInfo]:
+        """
+        Per-pitcher line for a completed game (or partial for an
+        in-progress game). Calls the same /boxscore endpoint as
+        get_game_boxscore so a daily ETL run that touches both burns
+        only one upstream request per game (the limiter / cache layer
+        sees identical URLs).
+        """
+        data = await self._get(f"/game/{game_id}/boxscore")
+
+        lines: list[PitchingLineInfo] = []
+        for side in ("home", "away"):
+            team_block = data.get("teams", {}).get(side, {})
+            team_name: str = team_block.get("team", {}).get("name", "Unknown")
+            team_id: int = team_block.get("team", {}).get("id", 0)
+            pitchers: list[int] = team_block.get("pitchers", [])
+            players: dict = team_block.get("players", {})
+
+            for player_id in pitchers:
+                key = f"ID{player_id}"
+                player_data = players.get(key, {})
+                pitching = player_data.get("stats", {}).get("pitching", {})
+                if not pitching:
+                    continue
+                person = player_data.get("person", {})
+                pitch_hand = (person.get("pitchHand") or {}).get("code")
+                lines.append(
+                    PitchingLineInfo(
+                        player_id=player_id,
+                        player_name=person.get("fullName", "Unknown"),
+                        team=team_name,
+                        team_id=team_id,
+                        innings_pitched=self._parse_innings(pitching.get("inningsPitched")),
+                        hits_allowed=int(pitching.get("hits", 0)),
+                        earned_runs=int(pitching.get("earnedRuns", 0)),
+                        walks_allowed=int(pitching.get("baseOnBalls", 0)),
+                        strikeouts=int(pitching.get("strikeOuts", 0)),
+                        era=self._safe_float(pitching.get("era")),
+                        whip=self._safe_float(pitching.get("whip")),
+                        throws=pitch_hand if pitch_hand in {"L", "R"} else None,
+                    )
+                )
+        logger.info("get_game_pitching_lines(%d): %d pitchers", game_id, len(lines))
+        return lines
+
+    async def get_probable_pitchers(
+        self, target_date: date | None = None
+    ) -> list[ProbablePitcherInfo]:
+        """
+        Probable starting pitchers for every scheduled game on
+        ``target_date`` (default: today). Returns one entry per game;
+        missing starters surface as None so callers can decide whether
+        to skip or wait for the announcement.
+
+        Calls ``GET /schedule?sportId=1&date=YYYY-MM-DD&hydrate=probablePitcher``.
+        """
+        d = target_date or date.today()
+        params = {
+            "sportId": 1,
+            "date": d.isoformat(),
+            "hydrate": "probablePitcher",
+        }
+        data = await self._get("/schedule", params=params)
+
+        results: list[ProbablePitcherInfo] = []
+        for day in data.get("dates", []):
+            for g in day.get("games", []):
+                home = g.get("teams", {}).get("home", {})
+                away = g.get("teams", {}).get("away", {})
+                hp = home.get("probablePitcher") or {}
+                ap = away.get("probablePitcher") or {}
+                results.append(
+                    ProbablePitcherInfo(
+                        game_id=g.get("gamePk", 0),
+                        date=g.get("gameDate", "")[:10] or d.isoformat(),
+                        home_team=home.get("team", {}).get("name", "Unknown"),
+                        away_team=away.get("team", {}).get("name", "Unknown"),
+                        home_pitcher_id=hp.get("id"),
+                        home_pitcher_name=hp.get("fullName"),
+                        away_pitcher_id=ap.get("id"),
+                        away_pitcher_name=ap.get("fullName"),
+                    )
+                )
+        logger.info(
+            "get_probable_pitchers(%s): %d games", d, len(results)
+        )
+        return results
+
+    @staticmethod
+    def _parse_innings(raw: object) -> float:
+        """MLB returns innings as a quirky string: '6.1' means 6⅓
+        innings, '6.2' = 6⅔. Convert to standard decimal float."""
+        if raw is None:
+            return 0.0
+        try:
+            s = str(raw)
+            if "." in s:
+                whole, frac = s.split(".", 1)
+                return int(whole) + {"0": 0.0, "1": 1 / 3, "2": 2 / 3}.get(frac, 0.0)
+            return float(s)
+        except (ValueError, TypeError):
+            return 0.0
 
     async def get_team_roster(self, team_id: int) -> list[RosterEntry]:
         """

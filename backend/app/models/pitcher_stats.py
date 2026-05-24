@@ -1,20 +1,30 @@
 """
-PitcherStats — season-level pitching aggregates for one player in one
-season. Populated by an ETL extension (TODO) and consumed by the
-enhanced hit-probability model in ``analytics.calculate_enhanced_hit_probability``.
+PitcherStats — pitching aggregates for one player.
 
-When a pitcher has no row in this table the model falls back to the
-league baselines defined in :mod:`app.services.analytics`.
+Two row flavors live in the same table, distinguished by
+``is_season_aggregate``:
+
+  * Per-game lines    → is_season_aggregate=False, game_id set, season set
+  * Season aggregates → is_season_aggregate=True,  game_id NULL, season set
+
+The two partial unique indexes below enforce that each shape stays
+de-duplicated without colliding with the other.
+
+Pitcher handedness lives on :attr:`Player.throws` (the MLB API's
+``pitchHand.code``), so this table doesn't carry a separate ``pitch_hand``
+column — joining via ``player_id`` is enough.
 """
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
-    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,12 +41,22 @@ class PitcherStats(Base):
         nullable=False,
         index=True,
     )
+    # NULL for season-aggregate rows; set for per-game rows.
+    game_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("games.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     season: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_season_aggregate: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
 
     # Counting stats
     games: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     innings_pitched: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     hits_allowed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    earned_runs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     walks_allowed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     strikeouts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -54,5 +74,18 @@ class PitcherStats(Base):
     player: Mapped["Player"] = relationship("Player", lazy="selectin")  # noqa: F821
 
     __table_args__ = (
-        UniqueConstraint("player_id", "season", name="uq_pitcher_stats_player_season"),
+        # Partial unique indexes — Postgres allows distinct uniqueness rules
+        # for each row flavor without two separate tables.
+        Index(
+            "uq_pitcher_stats_season",
+            "player_id", "season",
+            unique=True,
+            postgresql_where=text("is_season_aggregate"),
+        ),
+        Index(
+            "uq_pitcher_stats_game",
+            "player_id", "game_id",
+            unique=True,
+            postgresql_where=text("NOT is_season_aggregate"),
+        ),
     )
