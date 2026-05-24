@@ -12,6 +12,7 @@ Routes
   POST /stats/compare          — side-by-side player comparison
 """
 
+from datetime import date as _date
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Query
@@ -23,15 +24,20 @@ from app.database import get_db
 from app.models.user import UserRole
 from app.schemas.stats import (
     BattingLeadersResponse,
+    DailyPicksResponse,
+    EnhancedHitProbabilityResponse,
     HitProbabilityResponse,
     PlayerComparisonResponse,
     StreaksResponse,
     TeamRankingsResponse,
 )
 from app.services.analytics import (
+    DAILY_PICK_THRESHOLD,
     VALID_STATS,
+    calculate_enhanced_hit_probability,
     calculate_hit_probability,
     get_batting_leaders,
+    get_daily_picks,
     get_hot_cold_streaks,
     get_player_comparison,
     get_team_rankings,
@@ -151,3 +157,63 @@ async def compare_players(
     db: AsyncSession = Depends(get_db),
 ) -> PlayerComparisonResponse:
     return await get_player_comparison(db, player_ids=body.player_ids)
+
+
+# ── 6. Enhanced hit probability (multi-factor model, Phase 8) ────────────────
+
+
+@router.get(
+    "/hit-probability-v2/{player_id}",
+    response_model=EnhancedHitProbabilityResponse,
+    summary="Multi-factor hit probability (recent/season/career/pitcher/handedness)",
+)
+async def enhanced_hit_probability(
+    player_id: int,
+    game_id: Annotated[
+        int | None,
+        Query(description="Game to project against — enables home/away split"),
+    ] = None,
+    pitcher_id: Annotated[
+        int | None,
+        Query(description="Opposing starter; falls back to league baseline if omitted"),
+    ] = None,
+    _: TokenPayload = _analyst,
+    db: AsyncSession = Depends(get_db),
+) -> EnhancedHitProbabilityResponse:
+    result = await calculate_enhanced_hit_probability(
+        db, player_id=player_id, game_id=game_id, pitcher_id=pitcher_id
+    )
+    return EnhancedHitProbabilityResponse(**result)
+
+
+# ── 7. Daily picks (probability ≥ threshold) ─────────────────────────────────
+
+
+@router.get(
+    "/daily-picks",
+    response_model=DailyPicksResponse,
+    summary="Today's batters meeting the probability + confidence thresholds",
+)
+async def daily_picks(
+    min_probability: Annotated[
+        float,
+        Query(ge=0.0, le=1.0, description="Minimum hit probability — default 0.80"),
+    ] = DAILY_PICK_THRESHOLD,
+    min_confidence: Annotated[
+        int,
+        Query(ge=0, le=100, description="Minimum confidence score (0-100)"),
+    ] = 50,
+    target_date: Annotated[
+        _date | None,
+        Query(description="Override the date — defaults to today"),
+    ] = None,
+    _: TokenPayload = _analyst,
+    db: AsyncSession = Depends(get_db),
+) -> DailyPicksResponse:
+    result = await get_daily_picks(
+        db,
+        min_probability=min_probability,
+        min_confidence=min_confidence,
+        target_date=target_date,
+    )
+    return DailyPicksResponse(**result)

@@ -14,6 +14,13 @@ class Player(Base):
     full_name: Mapped[str] = mapped_column(String(100), nullable=False)
     team: Mapped[str] = mapped_column(String(100), nullable=False)
     position: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    # Handedness ('L' | 'R' | 'S' for switch). Optional — populated by
+    # the MLB ETL when available; the enhanced hit-probability model
+    # gracefully treats None as "no matchup modifier".
+    bats: Mapped[str | None] = mapped_column(String(1), nullable=True)
+    throws: Mapped[str | None] = mapped_column(String(1), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

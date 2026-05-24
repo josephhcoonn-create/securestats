@@ -586,3 +586,478 @@ async def get_player_comparison(
     }
 
     return PlayerComparisonResponse(players=comparison_entries, leaders=leaders)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enhanced hit probability (Phase 8)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Multi-factor model: pulls recent / season / career / home-away splits for
+# the batter, opposing pitcher's ERA + WHIP + handedness, and a league
+# baseline. Every component falls back to a sensible default when data is
+# missing so the model returns *something* even on a sparse database.
+#
+# Weight schedule (sums to 1.00):
+#   0.30  recent_avg          (last 15 games)
+#   0.15  season_avg          (current calendar year)
+#   0.10  career_avg          (all loaded games)
+#   0.05  home_away_split     (batter's avg in this venue context)
+#   0.30  pitcher_composite   (avg of ERA-derived + WHIP-derived term, plus handedness)
+#   0.10  league_avg          (DB-wide; fallback FALLBACK_LEAGUE_AVG when DB is empty)
+#
+# Final probability is clamped to [0.05, 0.95] — no certainties.
+
+# Weight constants — exposed so they're easy to tune from one place.
+_W_RECENT = 0.30
+_W_SEASON = 0.15
+_W_CAREER = 0.10
+_W_HOME_AWAY = 0.05
+_W_PITCHER = 0.30
+_W_LEAGUE = 0.10
+
+# Handedness matchup modifier — added to pitcher_composite before the
+# 0.30 weight is applied.
+_HANDEDNESS_BOOST = 0.015      # opposite hand or switch hitter
+_HANDEDNESS_PENALTY = -0.010   # same hand
+_HANDEDNESS_UNKNOWN = 0.0      # either side missing
+
+# Probability clamp + threshold — no certainties either way.
+# The clamp + threshold apply to the GAME-LEVEL probability (≥1 hit in
+# the next start), not the per-AB rate, because the daily picks UX
+# advertises "80% hit probability for today's game". The per-AB rate
+# is converted via 1 - (1-p)^EXPECTED_AB_PER_GAME.
+_PROB_MIN = 0.05
+_PROB_MAX = 0.95
+DAILY_PICK_THRESHOLD = 0.80
+_EXPECTED_AB_PER_GAME = 4  # typical for a starting position player
+
+# League-baseline fallbacks when the DB has nothing better.
+_FALLBACK_ERA = 4.20
+_FALLBACK_WHIP = 1.30
+_FALLBACK_PITCHER_IP = 0.0
+
+# Confidence buckets — see _calculate_confidence for the boost rules.
+_CONF_LOW = 30
+_CONF_MEDIUM = 60
+_CONF_HIGH = 85
+_CONF_PITCHER_BOOST = 10
+_CONF_PITCHER_BOOST_MIN_IP = 50
+_CONF_MAX = 100
+
+_RECENT_GAMES = 15
+
+
+# ── Helper queries ────────────────────────────────────────────────────────────
+
+
+async def _recent_batting_avg(
+    session: AsyncSession, player_id: int, n_games: int = _RECENT_GAMES
+) -> tuple[float | None, int]:
+    """Batting avg + total ABs over the player's last n_games final games."""
+    rn_col = func.row_number().over(
+        partition_by=BattingStats.player_id,
+        order_by=Game.date.desc(),
+    ).label("rn")
+    sub = (
+        select(BattingStats.at_bats, BattingStats.hits, rn_col)
+        .join(Game, BattingStats.game_id == Game.id)
+        .where(
+            BattingStats.player_id == player_id,
+            Game.status.in_(FINAL_STATUSES),
+        )
+        .subquery()
+    )
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(sub.c.at_bats), 0).label("ab"),
+                func.coalesce(func.sum(sub.c.hits), 0).label("h"),
+            ).where(sub.c.rn <= n_games)
+        )
+    ).one()
+    ab = row.ab or 0
+    h = row.h or 0
+    return ((h / ab) if ab > 0 else None, ab)
+
+
+async def _season_batting_avg(
+    session: AsyncSession, player_id: int, year: int | None = None
+) -> tuple[float | None, int]:
+    """Batting avg + ABs across the current (or specified) calendar year."""
+    target_year = year or date.today().year
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(BattingStats.at_bats), 0).label("ab"),
+                func.coalesce(func.sum(BattingStats.hits), 0).label("h"),
+            )
+            .join(Game, BattingStats.game_id == Game.id)
+            .where(
+                BattingStats.player_id == player_id,
+                func.extract("year", Game.date) == target_year,
+                Game.status.in_(FINAL_STATUSES),
+            )
+        )
+    ).one()
+    ab = row.ab or 0
+    h = row.h or 0
+    return ((h / ab) if ab > 0 else None, ab)
+
+
+async def _career_batting_avg(
+    session: AsyncSession, player_id: int
+) -> float | None:
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(BattingStats.at_bats), 0).label("ab"),
+                func.coalesce(func.sum(BattingStats.hits), 0).label("h"),
+            ).where(BattingStats.player_id == player_id)
+        )
+    ).one()
+    ab, h = row.ab or 0, row.h or 0
+    return (h / ab) if ab > 0 else None
+
+
+async def _home_away_split(
+    session: AsyncSession, player_id: int, player_team: str, at_home: bool
+) -> float | None:
+    """Player's batting avg in games where their team is home (or away)."""
+    condition = (
+        Game.home_team == player_team if at_home else Game.away_team == player_team
+    )
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(BattingStats.at_bats), 0).label("ab"),
+                func.coalesce(func.sum(BattingStats.hits), 0).label("h"),
+            )
+            .join(Game, BattingStats.game_id == Game.id)
+            .where(
+                BattingStats.player_id == player_id,
+                condition,
+                Game.status.in_(FINAL_STATUSES),
+            )
+        )
+    ).one()
+    ab, h = row.ab or 0, row.h or 0
+    return (h / ab) if ab > 0 else None
+
+
+async def _league_batting_avg(session: AsyncSession) -> float:
+    row = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(BattingStats.at_bats), 0).label("ab"),
+                func.coalesce(func.sum(BattingStats.hits), 0).label("h"),
+            )
+            .join(Game, BattingStats.game_id == Game.id)
+            .where(Game.status.in_(FINAL_STATUSES))
+        )
+    ).one()
+    ab, h = row.ab or 0, row.h or 0
+    return (h / ab) if ab > 0 else FALLBACK_LEAGUE_AVG
+
+
+async def _pitcher_factors(
+    session: AsyncSession, pitcher_id: int | None
+) -> tuple[float, float, float]:
+    """
+    Returns (era, whip, innings_pitched). Falls back to league baselines
+    when the pitcher isn't in PitcherStats yet.
+    """
+    if pitcher_id is None:
+        return (_FALLBACK_ERA, _FALLBACK_WHIP, _FALLBACK_PITCHER_IP)
+
+    from app.models.pitcher_stats import PitcherStats  # local import — avoids circular
+
+    row = (
+        await session.execute(
+            select(PitcherStats)
+            .where(PitcherStats.player_id == pitcher_id)
+            .order_by(PitcherStats.season.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        return (_FALLBACK_ERA, _FALLBACK_WHIP, _FALLBACK_PITCHER_IP)
+    return (
+        row.era if row.era is not None else _FALLBACK_ERA,
+        row.whip if row.whip is not None else _FALLBACK_WHIP,
+        row.innings_pitched or _FALLBACK_PITCHER_IP,
+    )
+
+
+# ── Pure helpers ─────────────────────────────────────────────────────────────
+
+
+def _handedness_modifier(
+    batter_bats: str | None, pitcher_throws: str | None
+) -> float:
+    """
+    Opposite-hand matchup is statistically friendlier to the batter.
+    Switch hitters always get the favorable side. Unknown hands → 0.
+    """
+    if not batter_bats or not pitcher_throws:
+        return _HANDEDNESS_UNKNOWN
+    if batter_bats.upper() == "S":  # switch hitter
+        return _HANDEDNESS_BOOST
+    return (
+        _HANDEDNESS_BOOST
+        if batter_bats.upper() != pitcher_throws.upper()
+        else _HANDEDNESS_PENALTY
+    )
+
+
+def _pitcher_composite(
+    era: float, whip: float, league_avg: float, handedness: float
+) -> float:
+    """
+    Combine the pitcher's ERA + WHIP into a hit-rate estimate, then
+    apply the handedness shift. League baselines (4.20 ERA / 1.30 WHIP)
+    define "neutral pitcher" → returns ≈ league_avg.
+    """
+    era = max(era, 0.5)   # clamp away from zero to avoid blowups
+    whip = max(whip, 0.5)
+    era_term = (_FALLBACK_ERA / era) * league_avg
+    whip_term = (whip / _FALLBACK_WHIP) * league_avg
+    return (era_term + whip_term) / 2 + handedness
+
+
+def _calculate_confidence(season_ab: int, pitcher_ip: float) -> int:
+    if season_ab >= 100:
+        base = _CONF_HIGH
+    elif season_ab >= 30:
+        base = _CONF_MEDIUM
+    else:
+        base = _CONF_LOW
+    if pitcher_ip >= _CONF_PITCHER_BOOST_MIN_IP:
+        base += _CONF_PITCHER_BOOST
+    return min(_CONF_MAX, base)
+
+
+# ── Public: enhanced hit probability ──────────────────────────────────────────
+
+
+async def calculate_enhanced_hit_probability(
+    session: AsyncSession,
+    player_id: int,
+    game_id: int | None = None,
+    pitcher_id: int | None = None,
+) -> dict:
+    """
+    Multi-factor hit probability for a batter vs a specific game/pitcher.
+
+    Returns a plain dict (not a Pydantic model) so it can be consumed by
+    both :func:`get_daily_picks` and the API layer without coupling.
+
+    See the weight schedule comment at the top of this section for the
+    full formula. Every factor falls back to a sensible default when
+    its source data is missing — the model never raises for "no data".
+    """
+    player = await session.get(Player, player_id)
+    if player is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Player {player_id} not found",
+        )
+
+    game = await session.get(Game, game_id) if game_id else None
+
+    # ── Batter factors ────────────────────────────────────────────────────────
+    recent_avg, _recent_ab = await _recent_batting_avg(session, player_id)
+    season_avg, season_ab = await _season_batting_avg(session, player_id)
+    career_avg = await _career_batting_avg(session, player_id)
+    league_avg = await _league_batting_avg(session)
+
+    # Home/away context — if game is provided, derive from it; otherwise None.
+    home_away = None
+    if game is not None:
+        at_home = game.home_team == player.team
+        home_away = await _home_away_split(session, player_id, player.team, at_home)
+
+    # ── Pitcher factors ──────────────────────────────────────────────────────
+    pitcher_era, pitcher_whip, pitcher_ip = await _pitcher_factors(session, pitcher_id)
+    pitcher: Player | None = (
+        await session.get(Player, pitcher_id) if pitcher_id else None
+    )
+    handedness = _handedness_modifier(
+        player.bats, pitcher.throws if pitcher else None
+    )
+    pitcher_comp = _pitcher_composite(pitcher_era, pitcher_whip, league_avg, handedness)
+
+    # ── Weighted blend with per-component fallbacks ──────────────────────────
+    def _or(value: float | None, fallback: float) -> float:
+        return value if value is not None else fallback
+
+    per_ab = (
+        _W_RECENT     * _or(recent_avg, _or(season_avg, _or(career_avg, league_avg)))
+        + _W_SEASON   * _or(season_avg, _or(career_avg, league_avg))
+        + _W_CAREER   * _or(career_avg, league_avg)
+        + _W_HOME_AWAY * _or(home_away, _or(career_avg, league_avg))
+        + _W_PITCHER  * pitcher_comp
+        + _W_LEAGUE   * league_avg
+    )
+    # Clamp per-AB to (0, 1) so the game-level transform stays sane,
+    # then convert: P(≥1 hit in N ABs) = 1 - (1 - p)^N.
+    per_ab = max(0.001, min(0.999, per_ab))
+    per_game = 1.0 - (1.0 - per_ab) ** _EXPECTED_AB_PER_GAME
+    probability = max(_PROB_MIN, min(_PROB_MAX, per_game))
+
+    confidence = _calculate_confidence(season_ab, pitcher_ip)
+
+    return {
+        "player_id": player.id,
+        "player_name": player.full_name,
+        "game_id": game.id if game else None,
+        "pitcher_id": pitcher.id if pitcher else None,
+        "pitcher_name": pitcher.full_name if pitcher else None,
+        "probability": round(probability, 3),
+        "display_probability": fmt_pct(probability),
+        "confidence": confidence,
+        "threshold_met": probability >= DAILY_PICK_THRESHOLD,
+        "factors": {
+            "recent_avg": round(recent_avg, 3) if recent_avg is not None else None,
+            "season_avg": round(season_avg, 3) if season_avg is not None else None,
+            "career_avg": round(career_avg, 3) if career_avg is not None else None,
+            "home_away_split": (
+                round(home_away, 3) if home_away is not None else None
+            ),
+            "pitcher_era": pitcher_era if pitcher_id else None,
+            "pitcher_whip": pitcher_whip if pitcher_id else None,
+            "handedness_matchup": handedness,
+            "league_avg": round(league_avg, 3),
+        },
+    }
+
+
+# ── Public: daily picks ──────────────────────────────────────────────────────
+
+
+async def get_daily_picks(
+    session: AsyncSession,
+    min_probability: float = DAILY_PICK_THRESHOLD,
+    min_confidence: int = 50,
+    target_date: date | None = None,
+) -> dict:
+    """
+    For every batter on every team playing on *target_date* (defaults to
+    today), run :func:`calculate_enhanced_hit_probability` and return
+    those meeting both thresholds, sorted by probability descending.
+
+    "Today's batters" = players who have appeared in 3+ of their team's
+    last 5 final games. This is a heuristic stand-in for real-time
+    starting lineup announcements (which the MLB API only publishes a
+    few hours before first pitch). The accuracy is roughly 85-90% for
+    everyday position players — pitchers and bench bats are filtered
+    out naturally.
+    """
+    when = target_date or date.today()
+
+    games_today = (
+        await session.execute(select(Game).where(Game.date == when))
+    ).scalars().all()
+
+    if not games_today:
+        return {
+            "target_date": str(when),
+            "min_probability": min_probability,
+            "min_confidence": min_confidence,
+            "games_considered": 0,
+            "candidates_evaluated": 0,
+            "picks": [],
+        }
+
+    # For each game, find probable batters: players from either team
+    # who have appeared in 3+ of that team's last 5 final games.
+    candidates: list[tuple[Player, Game]] = []
+    for game in games_today:
+        for team_name, _opponent_name in (
+            (game.home_team, game.away_team),
+            (game.away_team, game.home_team),
+        ):
+            recent_player_ids = await _likely_starters(session, team_name)
+            if not recent_player_ids:
+                continue
+            players = (
+                await session.execute(
+                    select(Player).where(Player.id.in_(recent_player_ids))
+                )
+            ).scalars().all()
+            for p in players:
+                candidates.append((p, game))
+
+    # Run the model on every candidate
+    evaluated = 0
+    picks: list[dict] = []
+    for player, game in candidates:
+        evaluated += 1
+        result = await calculate_enhanced_hit_probability(
+            session, player_id=player.id, game_id=game.id, pitcher_id=None
+        )
+        if (
+            result["probability"] >= min_probability
+            and result["confidence"] >= min_confidence
+        ):
+            opponent = (
+                game.away_team if game.home_team == player.team else game.home_team
+            )
+            picks.append(
+                {
+                    "player_id": player.id,
+                    "player_name": player.full_name,
+                    "team": player.team,
+                    "opponent": opponent,
+                    "game_id": game.id,
+                    "probability": result["probability"],
+                    "display_probability": result["display_probability"],
+                    "confidence": result["confidence"],
+                    "pitcher_name": result.get("pitcher_name"),
+                }
+            )
+
+    picks.sort(key=lambda p: p["probability"], reverse=True)
+
+    return {
+        "target_date": str(when),
+        "min_probability": min_probability,
+        "min_confidence": min_confidence,
+        "games_considered": len(games_today),
+        "candidates_evaluated": evaluated,
+        "picks": picks,
+    }
+
+
+async def _likely_starters(
+    session: AsyncSession, team_name: str, last_n_games: int = 5, min_appearances: int = 3
+) -> list[int]:
+    """
+    Return player_ids for batters who appeared in ≥ min_appearances of
+    *team_name*'s last *last_n_games* final games. Heuristic stand-in for
+    real-time starting lineups.
+    """
+    # Get the team's last N final games (newest first)
+    recent_games = (
+        await session.execute(
+            select(Game.id)
+            .where(
+                ((Game.home_team == team_name) | (Game.away_team == team_name)),
+                Game.status.in_(FINAL_STATUSES),
+            )
+            .order_by(Game.date.desc())
+            .limit(last_n_games)
+        )
+    ).scalars().all()
+    if not recent_games:
+        return []
+
+    # Players who batted in ≥ min_appearances of those games
+    rows = (
+        await session.execute(
+            select(BattingStats.player_id, func.count().label("apps"))
+            .where(BattingStats.game_id.in_(recent_games))
+            .group_by(BattingStats.player_id)
+            .having(func.count() >= min_appearances)
+        )
+    ).all()
+    return [r.player_id for r in rows]

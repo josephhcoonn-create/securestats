@@ -157,3 +157,63 @@ class PlayerComparisonResponse(BaseModel):
         ...,
         description="Maps stat name → player_id of the leader among compared players",
     )
+
+
+# ── Enhanced hit probability (Phase 8) ───────────────────────────────────────
+
+
+class EnhancedHitProbFactors(BaseModel):
+    """Per-factor breakdown returned alongside the headline probability."""
+
+    recent_avg: float | None = Field(None, description="Last 15 games batting avg")
+    season_avg: float | None = Field(None, description="Current season batting avg")
+    career_avg: float | None = Field(None, description="All-loaded games batting avg")
+    home_away_split: float | None = Field(
+        None, description="Player's split for this game's home/away context"
+    )
+    pitcher_era: float | None = Field(None, description="Opposing starter season ERA")
+    pitcher_whip: float | None = Field(None, description="Opposing starter season WHIP")
+    handedness_matchup: float = Field(
+        ..., description="+0.015 opposite hand, -0.010 same hand, 0 unknown"
+    )
+    league_avg: float = Field(..., description="League-wide baseline batting avg")
+
+
+class EnhancedHitProbabilityResponse(BaseModel):
+    """Multi-factor hit probability for a batter vs an opposing pitcher."""
+
+    player_id: int
+    player_name: str
+    game_id: int | None = Field(None, description="The game this projection is for")
+    pitcher_id: int | None = Field(
+        None, description="Opposing starter used (None = league baseline)"
+    )
+    pitcher_name: str | None = None
+    probability: float = Field(..., description="Clamped to [0.05, 0.95]")
+    display_probability: str = Field(..., description="e.g. '32.7%'")
+    confidence: int = Field(..., description="0-100 — based on AB + pitcher innings sample")
+    threshold_met: bool = Field(
+        ..., description="True iff probability ≥ 0.80 (the daily-picks bar)"
+    )
+    factors: EnhancedHitProbFactors
+
+
+class DailyPickEntry(BaseModel):
+    player_id: int
+    player_name: str
+    team: str
+    opponent: str
+    game_id: int
+    probability: float
+    display_probability: str
+    confidence: int
+    pitcher_name: str | None = None
+
+
+class DailyPicksResponse(BaseModel):
+    target_date: str
+    min_probability: float
+    min_confidence: int
+    games_considered: int
+    candidates_evaluated: int
+    picks: list[DailyPickEntry]
