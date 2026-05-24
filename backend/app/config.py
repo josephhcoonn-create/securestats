@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # Logging — "json" for production, "text" for local readability.
     log_format: str = "text"
 
+    # The Odds API (https://the-odds-api.com) — free tier ships 500
+    # requests/month, which comfortably covers a daily MLB pull.
+    # If unset, OddsClient refuses to construct and the daily picks
+    # feature degrades gracefully to "odds unavailable".
+    the_odds_api_key: str | None = None
+
     @property
     def cors_origins(self) -> list[str]:
         """Resolved CORS allowlist for this environment."""
