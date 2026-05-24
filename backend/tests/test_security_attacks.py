@@ -304,9 +304,12 @@ class TestMalformedJwt:
     async def test_tampered_signature_returns_401(
         self, client: AsyncClient, good_token: str
     ) -> None:
-        # Flip the last char of the signature segment
-        head, payload, sig = good_token.rsplit(".", 2)
-        tampered = f"{head}.{payload}.{sig[:-1] + ('A' if sig[-1] != 'A' else 'B')}"
+        # Replace the signature entirely so there's no chance the
+        # mutation happens to land on a base64 character that decodes
+        # to the same bytes (a flaky failure mode for "flip one char"
+        # tests on HS256 tokens).
+        head, payload, _sig = good_token.rsplit(".", 2)
+        tampered = f"{head}.{payload}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         resp = await client.get(
             "/api/v1/auth/me",
             headers={"Authorization": f"Bearer {tampered}"},
