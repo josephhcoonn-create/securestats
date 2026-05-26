@@ -939,6 +939,7 @@ async def get_daily_picks(
     min_probability: float = DAILY_PICK_THRESHOLD,
     min_confidence: int = 50,
     target_date: date | None = None,
+    include_factors: bool = False,
 ) -> dict:
     """
     For every batter on every team playing on *target_date* (defaults to
@@ -1002,19 +1003,20 @@ async def get_daily_picks(
             opponent = (
                 game.away_team if game.home_team == player.team else game.home_team
             )
-            picks.append(
-                {
-                    "player_id": player.id,
-                    "player_name": player.full_name,
-                    "team": player.team,
-                    "opponent": opponent,
-                    "game_id": game.id,
-                    "probability": result["probability"],
-                    "display_probability": result["display_probability"],
-                    "confidence": result["confidence"],
-                    "pitcher_name": result.get("pitcher_name"),
-                }
-            )
+            entry = {
+                "player_id": player.id,
+                "player_name": player.full_name,
+                "team": player.team,
+                "opponent": opponent,
+                "game_id": game.id,
+                "probability": result["probability"],
+                "display_probability": result["display_probability"],
+                "confidence": result["confidence"],
+                "pitcher_name": result.get("pitcher_name"),
+            }
+            if include_factors:
+                entry["factors"] = result["factors"]
+            picks.append(entry)
 
     picks.sort(key=lambda p: p["probability"], reverse=True)
 
