@@ -408,6 +408,27 @@ async def run_etl_for_date(target_date: date) -> ETLResult:
                     logger.warning("  %s", msg)
                     result.errors.append(msg)
 
+                # Grade any pending PickHistory rows whose games went
+                # final today. Yesterday's picks are graded by the next
+                # day's ETL run; that's why we grade target_date AND
+                # the day before — covers the common slate-spanning case.
+                try:
+                    from app.services.analytics import grade_pending_picks
+                    graded_today = await grade_pending_picks(session, target_date)
+                    graded_yesterday = await grade_pending_picks(
+                        session, target_date - timedelta(days=1)
+                    )
+                    if graded_today or graded_yesterday:
+                        logger.info(
+                            "PickHistory: graded %d picks for %s, %d for %s",
+                            graded_today, target_date,
+                            graded_yesterday, target_date - timedelta(days=1),
+                        )
+                except Exception as exc:  # noqa: BLE001
+                    msg = f"pick grading failed: {exc}"
+                    logger.warning("  %s", msg)
+                    result.errors.append(msg)
+
     except Exception as exc:  # noqa: BLE001
         msg = f"Pipeline-level failure: {exc}"
         logger.exception(msg)

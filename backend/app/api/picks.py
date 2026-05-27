@@ -22,6 +22,7 @@ from app.models.player import Player
 from app.models.user import UserRole
 from app.schemas.odds import BookmakerSnapshot
 from app.schemas.picks import (
+    ModelAccuracyResponse,
     PickEntry,
     PickHistoryEntry,
     PickHistoryResponse,
@@ -33,6 +34,7 @@ from app.services.analytics import (
     DAILY_PICK_THRESHOLD,
     calculate_enhanced_hit_probability,
     get_daily_picks,
+    get_model_accuracy,
 )
 from app.services.odds_persistence import get_latest_odds_for_games
 
@@ -270,3 +272,29 @@ async def picks_history(
         overall_accuracy_pct=overall,
         by_date=by_date,
     )
+
+
+# ── GET /picks/accuracy ──────────────────────────────────────────────────────
+
+
+@router.get(
+    "/accuracy",
+    response_model=ModelAccuracyResponse,
+    summary="Model accuracy from snapshotted PickHistory (graded by daily ETL)",
+)
+async def picks_accuracy(
+    _: Annotated[TokenPayload, _analyst],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: Annotated[
+        int,
+        Query(ge=1, le=365, description="Look back this many days"),
+    ] = 30,
+) -> ModelAccuracyResponse:
+    """
+    Unlike /picks/history (which re-runs the model retrospectively),
+    this endpoint reads from the PickHistory table — picks captured at
+    prediction time and graded once their games went final. Apples-to-
+    apples for tracking real-world model performance over time.
+    """
+    result = await get_model_accuracy(db, days=days)
+    return ModelAccuracyResponse(**result)

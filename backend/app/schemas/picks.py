@@ -69,3 +69,31 @@ class PickHistoryResponse(BaseModel):
     total_hits: int
     overall_accuracy_pct: float | None
     by_date: list[PickHistoryEntry]
+
+
+# ── Model accuracy (PickHistory-based) ───────────────────────────────────────
+
+
+class AccuracyByConfidence(BaseModel):
+    tier: str = Field(..., description="'low' | 'medium' | 'high'")
+    total: int
+    correct: int
+    accuracy_pct: float | None
+
+
+class ModelAccuracyResponse(BaseModel):
+    """Headline accuracy stats sourced from the PickHistory table —
+    picks snapshotted at prediction time and graded by the daily ETL."""
+
+    days: int
+    total_picks: int = Field(..., description="Graded picks (hit + no_hit) in the window")
+    pending_picks: int = Field(..., description="Picks not yet graded")
+    correct_predictions: int
+    accuracy_pct: float | None
+    avg_prob_correct: float | None = Field(
+        None, description="Mean predicted_probability across CORRECT picks"
+    )
+    avg_prob_incorrect: float | None = Field(
+        None, description="Mean predicted_probability across INCORRECT picks"
+    )
+    by_confidence: list[AccuracyByConfidence]

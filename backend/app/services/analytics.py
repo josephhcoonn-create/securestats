@@ -30,10 +30,12 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import Float, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.batting_stats import BattingStats
 from app.models.game import Game
+from app.models.pick_history import PickHistory
 from app.models.player import Player
 from app.schemas.stats import (
     BattingLeadersResponse,
@@ -988,6 +990,19 @@ async def get_daily_picks(
             for p in players:
                 candidates.append((p, game))
 
+    # Dedup candidates — a player whose team played in games where
+    # _likely_starters' team filter matches BOTH sides (a same-team
+    # H2H pair) would otherwise be evaluated twice for the same game.
+    seen: set[tuple[int, int]] = set()
+    deduped: list[tuple[Player, Game]] = []
+    for player, game in candidates:
+        key = (player.id, game.id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append((player, game))
+    candidates = deduped
+
     # Run the model on every candidate
     evaluated = 0
     picks: list[dict] = []
@@ -1020,6 +1035,14 @@ async def get_daily_picks(
 
     picks.sort(key=lambda p: p["probability"], reverse=True)
 
+    # Snapshot picks into PickHistory for accuracy tracking. Idempotent
+    # via UNIQUE(player_id, game_id) so repeated /picks/today calls on
+    # the same day produce no duplicates. We do this inside
+    # get_daily_picks so every surface that returns picks also locks
+    # them in for grading later.
+    if picks:
+        await _snapshot_picks(session, picks)
+
     return {
         "target_date": str(when),
         "min_probability": min_probability,
@@ -1028,6 +1051,202 @@ async def get_daily_picks(
         "candidates_evaluated": evaluated,
         "picks": picks,
     }
+
+
+async def _snapshot_picks(session: AsyncSession, picks: list[dict]) -> int:
+    """
+    Insert PickHistory rows for every pick that doesn't already have one
+    for this (player_id, game_id) pair. Returns the number of new rows.
+
+    The unique constraint + ON CONFLICT DO NOTHING make this idempotent
+    so /picks/today is safe to call repeatedly without churning rows.
+    """
+    rows = [
+        {
+            "player_id": p["player_id"],
+            "game_id": p["game_id"],
+            "predicted_probability": p["probability"],
+            "confidence": p["confidence"],
+            "actual_result": "pending",
+            "factors_snapshot": p.get("factors"),
+        }
+        for p in picks
+    ]
+    if not rows:
+        return 0
+    # RETURNING-based count works around the psycopg quirk of reporting
+    # rowcount=-1 for INSERT ... ON CONFLICT DO NOTHING statements.
+    stmt = (
+        pg_insert(PickHistory)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["player_id", "game_id"])
+        .returning(PickHistory.id)
+    )
+    result = await session.execute(stmt)
+    inserted_ids = result.scalars().all()
+    await session.commit()
+    return len(inserted_ids)
+
+
+# ── Model accuracy ───────────────────────────────────────────────────────────
+
+
+async def get_model_accuracy(
+    session: AsyncSession,
+    days: int = 30,
+) -> dict:
+    """
+    Walk every graded PickHistory row from the last *days* days and
+    report headline accuracy plus a confidence-tier breakdown.
+
+    A pick is "correct" iff actual_result == 'hit'. Pending picks
+    (game hasn't finished or grading hasn't run yet) are excluded
+    from the denominators so they don't drag accuracy toward zero.
+    """
+    cutoff = date.today() - timedelta(days=days)
+
+    rows = (
+        await session.execute(
+            select(PickHistory).where(
+                PickHistory.created_at >= cutoff,
+                PickHistory.actual_result.in_(("hit", "no_hit")),
+            )
+        )
+    ).scalars().all()
+
+    total = len(rows)
+    pending = (
+        await session.execute(
+            select(func.count()).select_from(PickHistory).where(
+                PickHistory.created_at >= cutoff,
+                PickHistory.actual_result == "pending",
+            )
+        )
+    ).scalar_one()
+
+    if total == 0:
+        return {
+            "days": days,
+            "total_picks": 0,
+            "pending_picks": pending,
+            "correct_predictions": 0,
+            "accuracy_pct": None,
+            "avg_prob_correct": None,
+            "avg_prob_incorrect": None,
+            "by_confidence": [],
+        }
+
+    correct_rows = [r for r in rows if r.actual_result == "hit"]
+    incorrect_rows = [r for r in rows if r.actual_result == "no_hit"]
+    correct = len(correct_rows)
+
+    avg_prob_correct = (
+        round(sum(r.predicted_probability for r in correct_rows) / len(correct_rows), 3)
+        if correct_rows else None
+    )
+    avg_prob_incorrect = (
+        round(
+            sum(r.predicted_probability for r in incorrect_rows) / len(incorrect_rows),
+            3,
+        )
+        if incorrect_rows else None
+    )
+
+    # Confidence-tier breakdown — does higher confidence == higher hit rate?
+    def _tier(conf: int) -> str:
+        if conf >= 80:
+            return "high"
+        if conf >= 50:
+            return "medium"
+        return "low"
+
+    tiers: dict[str, dict] = {
+        "high":   {"total": 0, "correct": 0},
+        "medium": {"total": 0, "correct": 0},
+        "low":    {"total": 0, "correct": 0},
+    }
+    for r in rows:
+        bucket = tiers[_tier(r.confidence)]
+        bucket["total"] += 1
+        if r.actual_result == "hit":
+            bucket["correct"] += 1
+
+    by_confidence = [
+        {
+            "tier": tier,
+            "total": data["total"],
+            "correct": data["correct"],
+            "accuracy_pct": (
+                round(data["correct"] * 100.0 / data["total"], 1)
+                if data["total"] > 0 else None
+            ),
+        }
+        for tier, data in tiers.items()
+    ]
+
+    return {
+        "days": days,
+        "total_picks": total,
+        "pending_picks": pending,
+        "correct_predictions": correct,
+        "accuracy_pct": round(correct * 100.0 / total, 1),
+        "avg_prob_correct": avg_prob_correct,
+        "avg_prob_incorrect": avg_prob_incorrect,
+        "by_confidence": by_confidence,
+    }
+
+
+async def grade_pending_picks(
+    session: AsyncSession, target_date: date | None = None
+) -> int:
+    """
+    Look up PickHistory rows still in 'pending' for games that have
+    reached a final status on *target_date* (defaults to today). For
+    each, check the player's batting line; set actual_result to 'hit'
+    when hits > 0, 'no_hit' when hits == 0. Players who didn't play
+    in the game keep their 'pending' status — they'll be ignored by
+    the accuracy calculation but available for audit.
+
+    Returns the number of rows graded.
+    """
+    when = target_date or date.today()
+    final_games = (
+        await session.execute(
+            select(Game.id).where(
+                Game.date == when,
+                Game.status.in_(FINAL_STATUSES),
+            )
+        )
+    ).scalars().all()
+
+    if not final_games:
+        return 0
+
+    pending = (
+        await session.execute(
+            select(PickHistory).where(
+                PickHistory.game_id.in_(final_games),
+                PickHistory.actual_result == "pending",
+            )
+        )
+    ).scalars().all()
+
+    graded = 0
+    for pick in pending:
+        line = (
+            await session.execute(
+                select(BattingStats).where(
+                    BattingStats.player_id == pick.player_id,
+                    BattingStats.game_id == pick.game_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if line is None:
+            continue  # player didn't appear; leave pending for audit
+        pick.actual_result = "hit" if line.hits > 0 else "no_hit"
+        graded += 1
+
+    return graded
 
 
 async def _likely_starters(
