@@ -9,6 +9,8 @@ import PlayersPage from './pages/PlayersPage'
 import LeadersPage from './pages/LeadersPage'
 import StreaksPage from './pages/StreaksPage'
 import ComparePage from './pages/ComparePage'
+import OddsPage from './pages/OddsPage'
+import DailyPicksPage from './pages/DailyPicksPage'
 import UnauthorizedPage from './pages/UnauthorizedPage'
 
 const queryClient = new QueryClient({
@@ -44,6 +46,8 @@ export default function App() {
               <Route path="/leaders" element={<LeadersPage />} />
               <Route path="/streaks" element={<StreaksPage />} />
               <Route path="/compare" element={<ComparePage />} />
+              <Route path="/odds" element={<OddsPage />} />
+              <Route path="/picks" element={<DailyPicksPage />} />
             </Route>
 
             {/* Catch-all */}

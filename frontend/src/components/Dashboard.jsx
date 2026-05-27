@@ -14,6 +14,8 @@ const NAV = [
   { to: '/leaders', label: 'Leaders' },
   { to: '/streaks', label: 'Streaks' },
   { to: '/compare', label: 'Compare' },
+  { to: '/odds', label: 'Odds' },
+  { to: '/picks', label: 'Daily Picks' },
 ]
 
 const ROLE_BADGE = {
