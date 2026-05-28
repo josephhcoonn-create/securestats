@@ -413,7 +413,10 @@ async def run_etl_for_date(target_date: date) -> ETLResult:
                 # day's ETL run; that's why we grade target_date AND
                 # the day before — covers the common slate-spanning case.
                 try:
-                    from app.services.analytics import grade_pending_picks
+                    from app.services.analytics import (
+                        get_model_accuracy,
+                        grade_pending_picks,
+                    )
                     graded_today = await grade_pending_picks(session, target_date)
                     graded_yesterday = await grade_pending_picks(
                         session, target_date - timedelta(days=1)
@@ -423,6 +426,32 @@ async def run_etl_for_date(target_date: date) -> ETLResult:
                             "PickHistory: graded %d picks for %s, %d for %s",
                             graded_today, target_date,
                             graded_yesterday, target_date - timedelta(days=1),
+                        )
+
+                    # Snapshot of model performance over the rolling window —
+                    # gives ops a daily heartbeat for "how is the model doing?"
+                    accuracy = await get_model_accuracy(session, days=30)
+                    if accuracy["total_picks"] > 0:
+                        # Pull confidence breakdown into a single line for log greppability
+                        by_conf = " ".join(
+                            f"{row['tier']}={row['correct']}/{row['total']}"
+                            for row in accuracy["by_confidence"]
+                        )
+                        logger.info(
+                            "ModelAccuracy[30d]: %d/%d correct (%s%%), pending=%d, "
+                            "avg_prob_correct=%s avg_prob_incorrect=%s | %s",
+                            accuracy["correct_predictions"],
+                            accuracy["total_picks"],
+                            accuracy["accuracy_pct"],
+                            accuracy["pending_picks"],
+                            accuracy["avg_prob_correct"],
+                            accuracy["avg_prob_incorrect"],
+                            by_conf,
+                        )
+                    else:
+                        logger.info(
+                            "ModelAccuracy[30d]: no graded picks yet (%d pending)",
+                            accuracy["pending_picks"],
                         )
                 except Exception as exc:  # noqa: BLE001
                     msg = f"pick grading failed: {exc}"

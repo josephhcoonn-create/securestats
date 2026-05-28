@@ -3,25 +3,38 @@ APScheduler integration for SecureStats.
 
 Jobs
 ────
-daily_etl    — runs run_daily_etl() every day at 06:00 America/New_York
-               (most MLB games finish by ~2 AM ET the night before).
+daily_etl           — runs run_daily_etl() every day at 06:00 ET
+                      (most MLB games finish by ~2 AM ET the night before).
 
-live_update  — runs run_live_update() every 15 minutes; the job itself
-               checks whether the current ET time falls inside game hours
-               (12:00 PM – 01:00 AM) and exits early if not.
+live_update         — runs run_live_update() every 15 minutes; the job itself
+                      checks whether the current ET time falls inside game
+                      hours (12:00 PM – 01:00 AM) and exits early if not.
 
-Both jobs are registered at startup via start_scheduler() and cancelled
+fetch_daily_odds    — runs refresh_odds_for_date() every day at 10:00 ET
+                      (after most sportsbooks have posted opening lines).
+
+fetch_odds_update   — runs refresh_odds_for_date() every 2 hours between
+                      10:00 and 19:00 ET to capture line movement.
+
+generate_daily_picks — runs get_daily_picks() at 12:00 ET (after starting
+                      lineups typically post) and again at 16:00 ET (to
+                      pick up late lineup updates).  The snapshot inside
+                      get_daily_picks writes to PickHistory automatically.
+
+All jobs are registered at startup via start_scheduler() and cancelled
 cleanly via stop_scheduler(), called from FastAPI's lifespan context.
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from app.config import settings
+from app.database import AsyncSessionLocal
 from app.services.etl import run_daily_etl, run_live_update
 
 logger = logging.getLogger(__name__)
@@ -75,6 +88,81 @@ async def _live_update_job() -> None:
         logger.exception("Scheduler: live-update job raised an unhandled exception")
 
 
+async def _fetch_daily_odds_job() -> None:
+    """Daily odds pull — runs at 10:00 ET right after opening lines drop."""
+    if not settings.the_odds_api_key:
+        logger.warning("Scheduler: fetch_daily_odds skipped — THE_ODDS_API_KEY not set")
+        return
+    # Lazy import so missing optional deps don't break scheduler startup
+    from app.services.odds_persistence import refresh_odds_for_date
+
+    logger.info("Scheduler: fetch_daily_odds fired")
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await refresh_odds_for_date(
+                session, api_key=settings.the_odds_api_key, target_date=date.today()
+            )
+        logger.info(
+            "Scheduler: fetch_daily_odds done — %d rows; quota remaining=%s used=%s",
+            result.rows_inserted, result.quota_remaining, result.quota_used,
+        )
+    except Exception:
+        logger.exception("Scheduler: fetch_daily_odds raised an unhandled exception")
+
+
+async def _fetch_odds_update_job() -> None:
+    """
+    Line-movement snapshot — runs every 2 hours between 10:00 and 19:00 ET.
+    The cron expression already gates the hour window; the early-exit
+    here is belt-and-suspenders against drift.
+    """
+    if not settings.the_odds_api_key:
+        return
+    hour = datetime.now(ET).hour
+    if hour < 10 or hour > 19:
+        return
+
+    from app.services.odds_persistence import refresh_odds_for_date
+
+    logger.info("Scheduler: fetch_odds_update fired (hour=%d ET)", hour)
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await refresh_odds_for_date(
+                session, api_key=settings.the_odds_api_key, target_date=date.today()
+            )
+        logger.info(
+            "Scheduler: fetch_odds_update done — %d snapshots; quota remaining=%s used=%s",
+            result.rows_inserted, result.quota_remaining, result.quota_used,
+        )
+    except Exception:
+        logger.exception("Scheduler: fetch_odds_update raised an unhandled exception")
+
+
+async def _generate_daily_picks_job() -> None:
+    """
+    Snapshot today's picks to PickHistory.
+
+    Runs twice — 12:00 ET for the first wave of lineups, then 16:00 ET
+    for late lineup adjustments. get_daily_picks() is idempotent on
+    (player_id, game_id), so the 16:00 run won't dupe rows; it only
+    adds picks for players who weren't surfaced earlier (e.g. a hot
+    bat added to the lineup at the last minute).
+    """
+    from app.services.analytics import get_daily_picks
+
+    logger.info("Scheduler: generate_daily_picks fired")
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await get_daily_picks(session)
+        logger.info(
+            "Scheduler: generate_daily_picks done — %d picks across %d games",
+            len(result.get("picks", [])),
+            result.get("games_considered", 0),
+        )
+    except Exception:
+        logger.exception("Scheduler: generate_daily_picks raised an unhandled exception")
+
+
 # ── Public start / stop ───────────────────────────────────────────────────────
 
 
@@ -105,9 +193,43 @@ def start_scheduler() -> AsyncIOScheduler:
         misfire_grace_time=300,
     )
 
+    # ── Daily odds pull — 10:00 ET ────────────────────────────────────────────
+    scheduler.add_job(
+        _fetch_daily_odds_job,
+        CronTrigger(hour=10, minute=0, timezone=ET),
+        id="fetch_daily_odds",
+        name="Fetch Daily Odds",
+        replace_existing=True,
+        misfire_grace_time=3_600,
+    )
+
+    # ── Odds line-movement snapshots — every 2 hrs from 10:00 to 19:00 ET ────
+    # Cron `hour="10-19/2"` fires at 10, 12, 14, 16, 18. The 10:00 run
+    # overlaps with fetch_daily_odds but the per-(game,book,fetched_at)
+    # uniqueness makes simultaneous runs no-ops on the second arrival.
+    scheduler.add_job(
+        _fetch_odds_update_job,
+        CronTrigger(hour="10-19/2", minute=30, timezone=ET),
+        id="fetch_odds_update",
+        name="Fetch Odds Update",
+        replace_existing=True,
+        misfire_grace_time=900,
+    )
+
+    # ── Daily picks snapshots — 12:00 ET + 16:00 ET ───────────────────────────
+    scheduler.add_job(
+        _generate_daily_picks_job,
+        CronTrigger(hour="12,16", minute=0, timezone=ET),
+        id="generate_daily_picks",
+        name="Generate Daily Picks",
+        replace_existing=True,
+        misfire_grace_time=1_800,
+    )
+
     scheduler.start()
     logger.info(
-        "Scheduler started — daily ETL @ 06:00 ET, live update every 15 min"
+        "Scheduler started — daily ETL @ 06:00 ET, live update q15m, "
+        "odds @ 10:00 + q2h until 19:00, picks @ 12:00 + 16:00"
     )
     return scheduler
 

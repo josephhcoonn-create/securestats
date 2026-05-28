@@ -15,6 +15,7 @@ quota against the real API.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import date as _date
 from datetime import datetime
 
@@ -33,17 +34,37 @@ from app.services.odds_client import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class OddsRefreshResult:
+    """
+    Returned by :func:`refresh_odds_for_date` so callers (admin endpoint,
+    scheduler) can surface quota burn without re-instantiating the client.
+    """
+    rows_inserted: int
+    quota_remaining: int | None
+    quota_used: int | None
+
+    # Backward-compat: bool(result) and int(result) collapse to rows_inserted
+    # so older code that did `if refresh_odds_for_date(...)` still works.
+    def __bool__(self) -> bool:
+        return self.rows_inserted > 0
+
+    def __int__(self) -> int:
+        return self.rows_inserted
+
+
 async def refresh_odds_for_date(
     session: AsyncSession,
     api_key: str,
     target_date: _date | None = None,
-) -> int:
+) -> OddsRefreshResult:
     """
     Fetch + parse + match + UPSERT today's odds for every matched Game.
 
-    Returns the number of GameOdds rows written (inserted or updated).
-    The unique constraint on ``(game_id, sportsbook, fetched_at)`` means
-    re-running within the same minute is a no-op on existing rows.
+    Returns the count of inserted rows alongside the quota headers from
+    the upstream response so callers can log / surface them. The unique
+    constraint on ``(game_id, sportsbook, fetched_at)`` means re-running
+    within the same minute is a no-op on existing rows.
 
     Raises:
       OddsApiError / OddsQuotaExhausted if the upstream call fails — the
@@ -53,20 +74,26 @@ async def refresh_odds_for_date(
     async with OddsClient(api_key=api_key) as oc:
         raw = await oc.get_todays_odds()
         remaining = oc.last_remaining_quota
+        used = oc.last_used_quota
     logger.info(
-        "refresh_odds_for_date(%s): %d games returned, quota remaining=%s",
+        "refresh_odds_for_date(%s): %d games returned, quota remaining=%s used=%s",
         when,
         len(raw),
         remaining,
+        used,
     )
 
     flat_rows = parse_odds_response(raw)
     if not flat_rows:
-        return 0
+        return OddsRefreshResult(
+            rows_inserted=0, quota_remaining=remaining, quota_used=used
+        )
 
     matched = await match_odds_to_games(session, flat_rows)
     if not matched:
-        return 0
+        return OddsRefreshResult(
+            rows_inserted=0, quota_remaining=remaining, quota_used=used
+        )
 
     inserted = 0
     for row, game_id in matched:
@@ -93,8 +120,13 @@ async def refresh_odds_for_date(
             inserted += 1
 
     await session.commit()
-    logger.info("refresh_odds_for_date(%s): %d rows inserted", when, inserted)
-    return inserted
+    logger.info(
+        "refresh_odds_for_date(%s): %d rows inserted; quota remaining=%s used=%s",
+        when, inserted, remaining, used,
+    )
+    return OddsRefreshResult(
+        rows_inserted=inserted, quota_remaining=remaining, quota_used=used
+    )
 
 
 async def get_latest_odds_for_games(

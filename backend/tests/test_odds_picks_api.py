@@ -116,7 +116,9 @@ class TestRefreshOddsForDate:
             written = await refresh_odds_for_date(
                 session, api_key="fake", target_date=date(2026, 5, 22)
             )
-        assert written == 2  # one row per bookmaker (DK + FD)
+        assert written.rows_inserted == 2  # one row per bookmaker (DK + FD)
+        # Quota header surfaced from the upstream response
+        assert written.quota_remaining == 499
 
         # And date_has_odds now reports True
         async with TestSessionLocal() as session:
@@ -178,8 +180,8 @@ class TestRefreshOddsForDate:
             finally:
                 op_mod.parse_odds_response = orig_parse  # restore
 
-        assert first == 2
-        assert second == 0  # unique constraint -> nothing new
+        assert first.rows_inserted == 2
+        assert second.rows_inserted == 0  # unique constraint -> nothing new
 
     async def test_no_matching_games_returns_zero(self) -> None:
         # No Game rows seeded for the dates in the response
@@ -191,7 +193,7 @@ class TestRefreshOddsForDate:
                 written = await refresh_odds_for_date(
                     session, api_key="fake", target_date=date(2026, 5, 22)
                 )
-        assert written == 0
+        assert written.rows_inserted == 0
 
 
 # ══════════════════════════════════════════════════════════════════════════════

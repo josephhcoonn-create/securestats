@@ -1,11 +1,21 @@
+import logging
+import time
+from datetime import date as _date
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import TokenPayload, require_role
+from app.config import settings
+from app.database import get_db
 from app.models.user import UserRole
-from app.schemas.etl import ETLTriggerResponse
+from app.schemas.etl import ETLTriggerResponse, OddsTriggerResponse
 from app.services.etl import run_daily_etl, run_live_update
+from app.services.odds_client import OddsApiError
+from app.services.odds_persistence import refresh_odds_for_date
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/etl", tags=["etl"])
 
@@ -43,4 +53,63 @@ async def trigger_etl(
         errors=result.errors,
         duration_seconds=round(result.duration_seconds, 2),
         success=result.success,
+    )
+
+
+@router.post(
+    "/trigger-odds",
+    response_model=OddsTriggerResponse,
+    summary="Manually fetch odds from The Odds API (admin only)",
+)
+async def trigger_odds(
+    target_date: Annotated[
+        _date | None,
+        Query(description="Override target date; defaults to today"),
+    ] = None,
+    _: TokenPayload = _admin,
+    db: AsyncSession = Depends(get_db),
+) -> OddsTriggerResponse:
+    """
+    Force an out-of-band odds refresh. Useful right after setting
+    ``THE_ODDS_API_KEY`` or when you want the dashboard to reflect
+    line movement immediately rather than waiting for the next
+    scheduled pull (10:00 ET daily + every 2 hours until 19:00 ET).
+
+    Returns the quota_remaining / quota_used headers from the upstream
+    response so you can keep an eye on the 500 calls/month free tier.
+    """
+    if not settings.the_odds_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="THE_ODDS_API_KEY is not set. Sign up at https://the-odds-api.com.",
+        )
+
+    when = target_date or _date.today()
+    started = time.monotonic()
+
+    try:
+        result = await refresh_odds_for_date(
+            db, api_key=settings.the_odds_api_key, target_date=when
+        )
+    except OddsApiError as exc:
+        logger.warning("trigger_odds failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Odds API error: {exc}",
+        ) from exc
+
+    duration = round(time.monotonic() - started, 2)
+    logger.info(
+        "trigger_odds(%s): %d rows in %ss; quota remaining=%s used=%s",
+        when, result.rows_inserted, duration,
+        result.quota_remaining, result.quota_used,
+    )
+
+    return OddsTriggerResponse(
+        target_date=str(when),
+        rows_inserted=result.rows_inserted,
+        quota_remaining=result.quota_remaining,
+        quota_used=result.quota_used,
+        duration_seconds=duration,
+        success=True,
     )
