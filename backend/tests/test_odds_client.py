@@ -29,59 +29,10 @@ from tests.conftest import TestSessionLocal
 @pytest.fixture
 def sample_response() -> list[dict]:
     """One MLB game with two bookmakers and all three markets — the
-    minimum non-trivial shape The Odds API returns."""
-    return [
-        {
-            "id": "abc",
-            "sport_key": "baseball_mlb",
-            "commence_time": "2026-05-22T23:05:00Z",
-            "home_team": "New York Yankees",
-            "away_team": "Boston Red Sox",
-            "bookmakers": [
-                {
-                    "key": "draftkings",
-                    "title": "DraftKings",
-                    "markets": [
-                        {
-                            "key": "h2h",
-                            "outcomes": [
-                                {"name": "New York Yankees", "price": -150},
-                                {"name": "Boston Red Sox", "price": 130},
-                            ],
-                        },
-                        {
-                            "key": "spreads",
-                            "outcomes": [
-                                {"name": "New York Yankees", "price": -110, "point": -1.5},
-                                {"name": "Boston Red Sox", "price": -110, "point": 1.5},
-                            ],
-                        },
-                        {
-                            "key": "totals",
-                            "outcomes": [
-                                {"name": "Over", "price": -110, "point": 8.5},
-                                {"name": "Under", "price": -110, "point": 8.5},
-                            ],
-                        },
-                    ],
-                },
-                {
-                    "key": "fanduel",
-                    "title": "FanDuel",
-                    "markets": [
-                        {
-                            "key": "h2h",
-                            "outcomes": [
-                                {"name": "New York Yankees", "price": -145},
-                                {"name": "Boston Red Sox", "price": 125},
-                            ],
-                        }
-                        # No spreads / totals from FanDuel in this snapshot
-                    ],
-                },
-            ],
-        }
-    ]
+    canonical Odds API shape, loaded from tests/fixtures/."""
+    from tests.fixtures import odds_api_sample
+
+    return odds_api_sample()
 
 
 # ─── parse_odds_response ─────────────────────────────────────────────────────

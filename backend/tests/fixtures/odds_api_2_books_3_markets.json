@@ -1,0 +1,51 @@
+[
+  {
+    "id": "abc",
+    "sport_key": "baseball_mlb",
+    "commence_time": "2026-05-22T23:05:00Z",
+    "home_team": "New York Yankees",
+    "away_team": "Boston Red Sox",
+    "bookmakers": [
+      {
+        "key": "draftkings",
+        "title": "DraftKings",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {"name": "New York Yankees", "price": -150},
+              {"name": "Boston Red Sox", "price": 130}
+            ]
+          },
+          {
+            "key": "spreads",
+            "outcomes": [
+              {"name": "New York Yankees", "price": -110, "point": -1.5},
+              {"name": "Boston Red Sox", "price": -110, "point": 1.5}
+            ]
+          },
+          {
+            "key": "totals",
+            "outcomes": [
+              {"name": "Over", "price": -110, "point": 8.5},
+              {"name": "Under", "price": -110, "point": 8.5}
+            ]
+          }
+        ]
+      },
+      {
+        "key": "fanduel",
+        "title": "FanDuel",
+        "markets": [
+          {
+            "key": "h2h",
+            "outcomes": [
+              {"name": "New York Yankees", "price": -145},
+              {"name": "Boston Red Sox", "price": 125}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]
