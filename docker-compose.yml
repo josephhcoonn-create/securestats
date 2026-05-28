@@ -38,8 +38,13 @@ services:
     # Published on the host so OpenAPI docs at http://localhost:8000/docs
     # work out of the box. Production deployments should remove this and
     # rely on the nginx /api proxy only.
+    # IPv4-only bind — Docker Desktop's IPv6 forwarder on WSL2 sometimes
+    # stalls instead of cleanly refusing, which makes Chrome's happy-
+    # eyeballs wait the full timeout on every request. Binding 127.0.0.1
+    # only makes the v6 attempt instantly refused so the fallback to v4
+    # is instant.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     healthcheck:
       test:         ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
       interval:     30s
@@ -57,8 +62,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    # IPv4-only — see the matching note on backend's ports above.
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     healthcheck:
       test:         ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
       interval:     30s
