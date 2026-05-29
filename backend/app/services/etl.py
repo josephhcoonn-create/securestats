@@ -376,10 +376,25 @@ async def run_etl_for_date(target_date: date) -> ETLResult:
                     len(processable),
                 )
 
+                # ── Always upsert Game rows for the WHOLE schedule ───────────
+                # Scheduled (pre-game) entries still need DB rows so the
+                # daily picks engine + probable-pitcher upsert have
+                # something to attach to. Batting / pitching ingestion
+                # only runs on processable statuses (next loop).
+                for game_info in all_games:
+                    try:
+                        await _upsert_game(session, game_info)
+                    except Exception as exc:  # noqa: BLE001
+                        msg = f"game {game_info['game_id']} skeleton upsert failed: {exc}"
+                        logger.warning("  %s", msg)
+                        result.errors.append(msg)
+
                 if not processable:
-                    logger.info("No processable games — ETL complete")
-                    result.duration_seconds = time.monotonic() - start
-                    return result
+                    logger.info(
+                        "Schedule upserted (%d games) but none processable yet "
+                        "— skipping batting/pitching ingestion",
+                        len(all_games),
+                    )
 
                 # ── TRANSFORM + LOAD (per game) ───────────────────────────────
                 for game_info in processable:

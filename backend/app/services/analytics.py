@@ -1288,11 +1288,19 @@ async def _likely_starters(
     if not recent_games:
         return []
 
-    # Players who batted in ≥ min_appearances of those games
+    # Players who batted in ≥ min_appearances of those games AND
+    # whose own Player.team matches the team being queried. Without
+    # the team filter the heuristic surfaces opposing batters from
+    # the recent series (e.g. a Marlins player picked up as a
+    # "Blue Jays starter" because they played the Jays last week).
     rows = (
         await session.execute(
             select(BattingStats.player_id, func.count().label("apps"))
-            .where(BattingStats.game_id.in_(recent_games))
+            .join(Player, Player.id == BattingStats.player_id)
+            .where(
+                BattingStats.game_id.in_(recent_games),
+                Player.team == team_name,
+            )
             .group_by(BattingStats.player_id)
             .having(func.count() >= min_appearances)
         )
