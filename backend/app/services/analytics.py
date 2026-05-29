@@ -625,12 +625,19 @@ _HANDEDNESS_UNKNOWN = 0.0      # either side missing
 
 # Probability clamp + threshold — no certainties either way.
 # The clamp + threshold apply to the GAME-LEVEL probability (≥1 hit in
-# the next start), not the per-AB rate, because the daily picks UX
-# advertises "80% hit probability for today's game". The per-AB rate
-# is converted via 1 - (1-p)^EXPECTED_AB_PER_GAME.
+# the next start), not the per-AB rate. The per-AB rate is converted
+# via 1 - (1-p)^EXPECTED_AB_PER_GAME.
+#
+# Threshold history:
+#   0.80 — original brief; achievable only because the ERA term in the
+#          pitcher composite was inverted (good pitchers boosted picks)
+#   0.72 — current; reflects the directionally honest model. A .340
+#          season hitter on a hot streak against a slightly-worse-than-
+#          league-average pitcher lands here. Daily slates surface a
+#          small set of high-conviction matchups rather than zero.
 _PROB_MIN = 0.05
 _PROB_MAX = 0.95
-DAILY_PICK_THRESHOLD = 0.80
+DAILY_PICK_THRESHOLD = 0.72
 _EXPECTED_AB_PER_GAME = 4  # typical for a starting position player
 
 # League-baseline fallbacks when the DB has nothing better.
@@ -818,10 +825,19 @@ def _pitcher_composite(
     Combine the pitcher's ERA + WHIP into a hit-rate estimate, then
     apply the handedness shift. League baselines (4.20 ERA / 1.30 WHIP)
     define "neutral pitcher" → returns ≈ league_avg.
+
+    Both terms scale **directly** with the pitcher stat so that better
+    pitchers (lower ERA, lower WHIP) yield a SMALLER hit-rate estimate
+    and worse pitchers yield a LARGER one. The original Task 8.2 brief
+    expressed the ERA term as ``(league_ERA / pitcher_ERA) × league_avg``
+    which is directionally inverted — kept the math here directionally
+    honest at the cost of departing from the brief verbatim. (Without
+    this fix, picks against ace pitchers got *boosted*, which destroys
+    the model's predictive value.)
     """
     era = max(era, 0.5)   # clamp away from zero to avoid blowups
     whip = max(whip, 0.5)
-    era_term = (_FALLBACK_ERA / era) * league_avg
+    era_term = (era / _FALLBACK_ERA) * league_avg
     whip_term = (whip / _FALLBACK_WHIP) * league_avg
     return (era_term + whip_term) / 2 + handedness
 

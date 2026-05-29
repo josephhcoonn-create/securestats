@@ -88,22 +88,15 @@ class TestPitcherComposite:
         assert result == pytest.approx(0.250, abs=0.001)
 
     def test_better_pitcher_lowers_hit_rate(self) -> None:
-        # ERA = 2.00 (much better than 4.20) → era_term shrinks
+        # ERA = 2.00 (much better than league 4.20) → era_term shrinks
+        # WHIP = 1.00 (better than league 1.30) → whip_term shrinks
+        # Math:
+        #   era_term  = (2.0 / 4.2)  * 0.25 = 0.119
+        #   whip_term = (1.0 / 1.3)  * 0.25 = 0.192
+        #   composite = (0.119 + 0.192) / 2 = 0.156
+        # → well below league_avg (.250) as expected for an elite pitcher.
         result = _pitcher_composite(era=2.00, whip=1.00, league_avg=0.250, handedness=0)
-        # era_term = (4.2/2.0)*0.25 = 0.525
-        # whip_term = (1.0/1.3)*0.25 = 0.192
-        # mean = 0.359 (good hitter projection vs bad ERA inversion)
-        # Sanity: > league_avg only because ERA term blows up. That's the
-        # intentional design — lower opponent ERA → fewer hits = lower term.
-        # In this case ERA 2.0 SHOULD favor the pitcher … but our formula
-        # inverts ERA, so a low pitcher ERA actually inflates era_term?
-        # Re-read: era_term = (league_era/pitcher_era)*league_avg. If
-        # pitcher_era < league_era, era_term > league_avg. That's flipped!
-        # Documenting current behavior: ERA term acts as "hit-friendliness"
-        # proxy — high opp ERA means more hits allowed. But the formula
-        # inverts: (4.2/pitcher) → bigger when pitcher is BETTER.
-        # This is intentional for now — the brief spec is what it is.
-        assert result > 0.250  # current spec: lower ERA → higher hit-prob input
+        assert result < 0.250  # ace pitcher depresses batter's hit-rate
 
     def test_handedness_added_after_blend(self) -> None:
         baseline = _pitcher_composite(4.20, 1.30, 0.250, handedness=0)

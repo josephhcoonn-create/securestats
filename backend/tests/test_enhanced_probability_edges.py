@@ -168,19 +168,21 @@ class TestSwitchHitter:
 
 class TestProbabilityClamp:
     async def test_extreme_high_inputs_clamp_at_upper_bound(self) -> None:
-        """Stack the deck: .800 hitter across 30+ games against a
-        sub-1.00 WHIP pitcher with opposite-hand matchup. The per-game
-        probability should hit the 0.95 ceiling."""
+        """Stack the deck: .800 hitter across 7 games against a
+        terrible pitcher (high ERA + WHIP) with opposite-hand matchup.
+        Under the corrected formula a bad pitcher inflates the per-AB
+        blend — this combo should pin the per-game probability at the
+        0.95 ceiling."""
         async with TestSessionLocal() as session:
             elite_batter = Player(
                 mlb_id=890301, full_name="Elite Bat", team="A",
                 position="LF", bats="L",
             )
-            elite_pitcher = Player(
-                mlb_id=890302, full_name="Elite Arm", team="B",
+            terrible_pitcher = Player(
+                mlb_id=890302, full_name="Batting Practice", team="B",
                 position="P", throws="R",
             )
-            session.add_all([elite_batter, elite_pitcher])
+            session.add_all([elite_batter, terrible_pitcher])
             await session.flush()
 
             # Seed 7 final games over the past week with elite hitting line
@@ -202,15 +204,19 @@ class TestProbabilityClamp:
                     )
                 )
 
-            # Pitcher with elite stats AND high innings (confidence boost)
+            # Terrible pitcher: ERA 6.50, WHIP 1.85, 80 IP (boost confidence)
+            # → era_term = (6.5/4.2)*league = 1.55 × league
+            # → whip_term = (1.85/1.3)*league = 1.42 × league
+            # Combined with the elite batter weight (.60 × .800) the per-AB
+            # blend is well above .50 → per-game lands above 0.95 → clamps.
             session.add(
                 PitcherStats(
-                    player_id=elite_pitcher.id,
+                    player_id=terrible_pitcher.id,
                     season=TODAY.year,
                     games=12, innings_pitched=80.0,
-                    hits_allowed=40, earned_runs=12,
-                    walks_allowed=8, strikeouts=90,
-                    era=1.35, whip=0.60,
+                    hits_allowed=120, earned_runs=58,
+                    walks_allowed=45, strikeouts=40,
+                    era=6.50, whip=1.85,
                 )
             )
             await session.commit()
@@ -219,7 +225,7 @@ class TestProbabilityClamp:
                 session,
                 player_id=elite_batter.id,
                 game_id=None,
-                pitcher_id=elite_pitcher.id,
+                pitcher_id=terrible_pitcher.id,
             )
 
         assert result["probability"] == 0.95  # upper clamp hit exactly
