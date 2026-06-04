@@ -1,0 +1,12 @@
+{
+  "name": "securestats-tooling",
+  "private": true,
+  "description": "Root-level Node dev tooling (capture-dashboard.mjs, etc). App code lives in frontend/.",
+  "type": "module",
+  "scripts": {
+    "capture-dashboard": "node scripts/capture-dashboard.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.49"
+  }
+}

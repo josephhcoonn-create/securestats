@@ -12,13 +12,10 @@
 ![Postgres 16](https://img.shields.io/badge/postgres-16-336791)
 ![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)
 
-<!-- Vector mockup so the README never shows a broken image. Replace with
-     a real PNG capture (docs/dashboard-screenshot.png) when ready —
-     see docs/README.md. -->
 <p align="center">
-  <img src="docs/dashboard-screenshot.svg" alt="SecureStats dashboard" width="900"/>
+  <img src="docs/dashboard-screenshot.png" alt="SecureStats Daily Picks dashboard" width="900"/>
   <br/>
-  <em>Player table — sortable, searchable, with expandable game-log rows. <a href="docs/README.md">Replace with real screenshot →</a></em>
+  <em>Daily Picks tab — multi-factor hit-probability rings, confidence badges, sort + min-confidence controls. 48 picks across 15 games, click any card for the full factor breakdown + live odds.</em>
 </p>
 
 ---

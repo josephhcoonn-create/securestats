@@ -2,21 +2,25 @@
 
 Static assets referenced by the project root [`README.md`](../README.md).
 
-## Replacing the dashboard mockup
+## Dashboard hero
 
-`dashboard-screenshot.svg` is a vector mockup used as the README hero image
-so the page never shows a broken-image icon. To swap in a real screenshot:
+`dashboard-screenshot.png` is the live PNG referenced from the root README's
+hero `<img>`. To regenerate it (after a frontend tweak, slate refresh, etc.):
 
-1. Boot the stack and sign in:
-   ```bash
-   docker compose up --build
-   open http://localhost:8080
-   ```
-2. Capture the view you want (Players, Leaders, Streaks, or Compare) as
-   a PNG.
-3. Save it here as `dashboard-screenshot.png` (or `.jpg`).
-4. Update the `<img src="…"/>` reference in the root README to point at
-   the new file, then commit.
+```bash
+# from repo root, with the stack running on http://localhost:8080
+npm install
+npx playwright install chromium    # one-time
+npm run capture-dashboard
+```
 
-A 1200×700 capture sits nicely at the README width (`width="900"` on the
-`<img>` tag — adjust if your image has a different aspect ratio).
+The capture script (`scripts/capture-dashboard.mjs`) logs in as
+`josephhcoonn / ChangeMe123!`, drops the JWT into `localStorage`, navigates
+to `/picks`, waits for the radial-bar charts to render, and writes a
+1440×900 PNG to `docs/dashboard-screenshot.png`.
+
+Set `CLICK_HISTORY=1` to capture the History sub-tab instead, or override
+`TARGET_PATH` (e.g. `TARGET_PATH=/odds`) to capture a different page.
+
+`dashboard-screenshot.svg` is the old vector placeholder, kept around as
+a fallback in case the PNG ever gets deleted.
